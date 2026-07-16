@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS submissions_log (
     ts        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS answer_log (
+    id        INTEGER PRIMARY KEY,
+    ts        TEXT NOT NULL,
+    source    TEXT NOT NULL,          -- 'llm' (map answers are user-authored)
+    question  TEXT NOT NULL,
+    answer    TEXT NOT NULL,
+    job_ref   TEXT DEFAULT ''         -- '<platform>:<external_id> title @ company'
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_state ON applications(state);
 CREATE INDEX IF NOT EXISTS idx_sub_platform_ts ON submissions_log(platform, ts);
 """
@@ -58,13 +67,21 @@ class Queue:
     def __init__(self, db_path: str | Path = DEFAULT_DB):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=10)
         self.conn.row_factory = sqlite3.Row
+        # The dashboard and scheduled runs write concurrently — WAL avoids
+        # 'database is locked' between the two processes.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=10000")
         self.conn.executescript(SCHEMA)
         # Migration: add columns introduced after the first release
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(jobs)")}
         if "salary" not in cols:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN salary TEXT DEFAULT ''")
+        acols = {r["name"] for r in self.conn.execute("PRAGMA table_info(applications)")}
+        if "retry_count" not in acols:
+            self.conn.execute(
+                "ALTER TABLE applications ADD COLUMN retry_count INTEGER DEFAULT 0")
         self.conn.commit()
 
     # -- discovery -----------------------------------------------------------
@@ -119,6 +136,35 @@ class Queue:
             (platform, app_id, utcnow()),
         )
         self.conn.commit()
+
+    def log_answer(self, source: str, question: str, answer: str,
+                   job_ref: str = "") -> None:
+        self.conn.execute(
+            "INSERT INTO answer_log (ts, source, question, answer, job_ref)"
+            " VALUES (?,?,?,?,?)",
+            (utcnow(), source, question, answer, job_ref))
+        self.conn.commit()
+
+    def recent_answers(self, limit: int = 30) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT ts, source, question, answer, job_ref FROM answer_log"
+            " ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+    # -- retry bookkeeping -----------------------------------------------------
+
+    def mark_for_retry(self, app_id: int, notes: str) -> None:
+        """Transient failure: re-arm as APPROVED and count the attempt."""
+        self.conn.execute(
+            """UPDATE applications SET state=?, notes=?, updated_at=?,
+               retry_count = retry_count + 1 WHERE id=?""",
+            (State.APPROVED.value, notes, utcnow(), app_id))
+        self.conn.commit()
+
+    def retry_count(self, app_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT retry_count FROM applications WHERE id=?", (app_id,)).fetchone()
+        return row["retry_count"] if row else 0
 
     def submissions_today(self, platform: str) -> int:
         row = self.conn.execute(

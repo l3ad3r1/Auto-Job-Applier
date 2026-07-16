@@ -16,6 +16,7 @@ python app.py prepare                # score vs job spec + draft answers
 python app.py review                 # dashboard at http://127.0.0.1:8377
 python app.py apply <platform> [--limit N]   # submit APPROVED items only
 python app.py login <platform>       # one-time manual sign-in (user only)
+python app.py doctor                 # read-only health canary (exit 1 = unhealthy)
 ```
 
 Discovery and apply open a real browser and take minutes — run them one at a
@@ -23,12 +24,16 @@ time with generous timeouts, never in parallel.
 
 ## The routine ("run the job applier")
 
-1. `discover` each configured platform, sequentially.
-2. `prepare`.
-3. `status` — report pending_review count; remind the user to approve in the
+1. `doctor` — if a platform is reported unhealthy (expired session, rotted
+   selectors), SKIP that platform for this run and put the doctor's message
+   at the top of your report. Do not abort the whole run for one platform.
+2. `discover` each healthy platform, sequentially.
+3. `prepare`.
+4. `status` — report pending_review count; remind the user to approve in the
    dashboard.
-4. Only if approved items exist: `apply` per platform; report each result
-   verbatim.
+5. Only if approved items exist: `apply` per platform; report each result
+   verbatim. Failures marked "transient, will retry" are re-attempted
+   automatically on the next run (max 2 retries) — report them but don't act.
 
 ## Hard rules
 

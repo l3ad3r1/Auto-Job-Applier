@@ -86,6 +86,16 @@ def llm_answer(question: str, options: list[str] | None,
     _cache[cache_key] = result
     if result is not None:
         print(f"    [llm] {question!r} -> {result!r}")
+        # Audit trail: every answer the LLM drafts on the user's behalf is
+        # recorded and surfaced in the dashboard (profile-map answers are
+        # user-authored, so only LLM ones are logged).
+        try:
+            from core.queue import Queue
+            ref = (f"{job.platform}:{job.external_id} {job.title} @ {job.company}"
+                   if job else "")
+            Queue().log_answer("llm", question, result, ref)
+        except Exception as e:
+            print(f"    [llm] audit log failed: {e}")
     return result
 
 

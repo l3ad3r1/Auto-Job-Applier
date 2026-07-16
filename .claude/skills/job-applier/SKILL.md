@@ -13,6 +13,7 @@ browser profiles or credentials).
 Quick reference:
 
 ```bash
+.venv/Scripts/python.exe app.py doctor              # health canary FIRST — skip unhealthy platforms
 .venv/Scripts/python.exe app.py discover linkedin   # then naukri, indeed — sequential
 .venv/Scripts/python.exe app.py prepare
 .venv/Scripts/python.exe app.py status

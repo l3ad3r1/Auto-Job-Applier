@@ -6,6 +6,7 @@
   python app.py review               open the approval dashboard
   python app.py apply <platform>     submit APPROVED applications (paced, capped)
   python app.py status               queue counts
+  python app.py doctor               per-platform health canary (read-only)
 """
 from __future__ import annotations
 
@@ -119,11 +120,88 @@ def cmd_apply(platform: str, limit: int | None = None) -> None:
                 queue.log_submission(platform, item.app_id)
                 print("applied ✓")
             else:
-                queue.set_state(item.app_id, State.FAILED, notes=result.note)
-                print(f"failed: {result.note}")
+                shot = adapter.capture_debug(page, f"app{item.app_id}")
+                note = f"{result.note} [debug: {shot}]"
+                if _is_transient(result.note) and queue.retry_count(item.app_id) < 2:
+                    queue.mark_for_retry(item.app_id, f"transient, will retry: {note}")
+                    print(f"failed (will retry next run): {result.note}")
+                else:
+                    queue.set_state(item.app_id, State.FAILED, notes=note)
+                    print(f"failed: {result.note}")
             limiter.application_delay()
     finally:
         adapter.close_browser()
+
+
+def _is_transient(note: str) -> bool:
+    """Failures worth an automatic retry on the next run (vs. real blocks
+    like unanswered questions or external-apply jobs)."""
+    markers = ("TimeoutError", "adapter error", "no confirmation",
+               "never became visible", "never became ready",
+               "did not reach submission", "did not reach Submit")
+    return any(m in note for m in markers)
+
+
+def cmd_doctor() -> None:
+    """Per-platform health canary: session alive? does search render cards?
+
+    Read-only — never applies. Exit code 1 if any platform is unhealthy,
+    so schedulers/agents can alert on it.
+    """
+    from adapters import ADAPTERS
+
+    config = load_config()
+    cfg = config.get("search", {})
+    keyword = (cfg.get("keywords") or ["manager"])[0]
+    location = (cfg.get("locations") or ["India"])[0]
+    failures = []
+
+    # Local LLM reachability (non-fatal: pipeline degrades to flagging)
+    llm_cfg = config.get("llm", {})
+    if llm_cfg.get("enabled"):
+        from llm.client import LLMError, chat
+        try:
+            chat(llm_cfg.get("base_url", "http://localhost:11434/v1"),
+                 llm_cfg.get("model", "gemma4:latest"),
+                 "Reply with exactly: ok", "ping", timeout=60)
+            print("  llm: OK")
+        except LLMError as e:
+            print(f"  llm: DEGRADED ({e}) — unmatched questions will be flagged")
+
+    for platform in ADAPTERS:
+        adapter = get_adapter(platform)
+        try:
+            _, page = adapter.open_browser(headless=False)
+            try:
+                if not adapter.is_logged_in(page):
+                    failures.append(f"{platform}: session expired — run:"
+                                    f" python app.py login {platform}")
+                    print(f"  {platform}: LOGIN NEEDED")
+                    continue
+                jobs = adapter.search(page, {
+                    "search": {**cfg, "keywords": [keyword],
+                               "locations": [location]},
+                    "limits": {"discover_batch": 5},
+                })
+                if jobs:
+                    print(f"  {platform}: OK ({len(jobs)} cards parsed)")
+                else:
+                    failures.append(f"{platform}: search rendered 0 parseable"
+                                    " cards — selectors may have rotted")
+                    adapter.capture_debug(page, "doctor")
+                    print(f"  {platform}: NO CARDS (debug captured)")
+            finally:
+                adapter.close_browser()
+        except Exception as e:
+            failures.append(f"{platform}: {type(e).__name__}: {str(e)[:100]}")
+            print(f"  {platform}: ERROR {type(e).__name__}")
+
+    if failures:
+        print("\nUNHEALTHY:")
+        for f in failures:
+            print(f"  ! {f}")
+        sys.exit(1)
+    print("\nAll platforms healthy.")
 
 
 def cmd_status() -> None:
@@ -146,6 +224,7 @@ def main() -> None:
     sub.add_parser("prepare")
     sub.add_parser("review")
     sub.add_parser("status")
+    sub.add_parser("doctor")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -160,6 +239,8 @@ def main() -> None:
         cmd_apply(args.platform, limit=args.limit)
     elif args.cmd == "status":
         cmd_status()
+    elif args.cmd == "doctor":
+        cmd_doctor()
 
 
 if __name__ == "__main__":

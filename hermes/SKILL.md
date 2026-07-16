@@ -31,6 +31,7 @@ cd "E:/claude-projects/job-applier"
 ./.venv/Scripts/python.exe app.py discover naukri     # scrape new jobs (also: linkedin, indeed)
 ./.venv/Scripts/python.exe app.py prepare             # score + draft answers -> pending_review
 ./.venv/Scripts/python.exe app.py apply naukri --limit 5   # submit APPROVED items only
+./.venv/Scripts/python.exe app.py doctor              # read-only health canary
 ```
 
 Discovery/apply commands open a real browser and can take several minutes —
@@ -41,13 +42,18 @@ The review dashboard is `python app.py review` → http://127.0.0.1:8377
 
 ## Daily routine (what "run the job applier" means)
 
-1. `discover linkedin`, `discover naukri`, `discover indeed` — run sequentially,
+1. `doctor` — if it reports a platform unhealthy (LOGIN NEEDED / NO CARDS),
+   SKIP that platform this run and put the doctor's message at the top of
+   your report. Do not abort the whole run for one bad platform.
+2. `discover <platform>` for each healthy platform — run sequentially,
    never in parallel (each opens a real browser with a persistent profile).
-2. `prepare` — new jobs get scored; matches land in pending_review.
-3. `status` — then TELL THE USER how many are pending review and how many
+3. `prepare` — new jobs get scored; matches land in pending_review.
+4. `status` — then TELL THE USER how many are pending review and how many
    approved items are waiting, with a reminder to open the dashboard.
-4. Only if there are APPROVED items: `apply <platform>` for each platform
+5. Only if there are APPROVED items: `apply <platform>` for each platform
    that has them. Report per-job results verbatim (applied / failed + reason).
+   Failures marked "transient, will retry" re-attempt automatically next
+   run — report them, take no action.
 
 ## Hard rules — do not violate
 

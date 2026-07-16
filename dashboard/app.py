@@ -33,7 +33,8 @@ def index():
     failed = [i.to_dict() for i in queue.items(State.FAILED)][:20]
     tpl = env.get_template("index.html")
     return tpl.render(pending=pending, approved=approved, recent=recent,
-                      failed=failed, counts=queue.counts())
+                      failed=failed, counts=queue.counts(),
+                      llm_answers=queue.recent_answers(20))
 
 
 @app.post("/decide/{app_id}/{decision}")

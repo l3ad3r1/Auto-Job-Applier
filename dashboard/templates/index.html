@@ -87,6 +87,18 @@
     <span class="meta"> — {{ item.company }}</span></div>
   {% else %}<div class="empty">None yet.</div>{% endfor %}
 
+  {% if llm_answers %}
+  <h2>Recent LLM-drafted answers (audit)</h2>
+  <div class="card">
+    <dl class="qa">
+      {% for a in llm_answers %}
+      <dt>{{ a.question }} <span class="meta">— {{ a.job_ref }}</span></dt>
+      <dd>→ {{ a.answer }}</dd>
+      {% endfor %}
+    </dl>
+  </div>
+  {% endif %}
+
   {% if failed %}
   <h2>Failed</h2>
   {% for item in failed %}
