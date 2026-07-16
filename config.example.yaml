@@ -1,0 +1,39 @@
+# Copy to config.yaml and edit. config.yaml is gitignored.
+
+search:
+  keywords:
+    - "Android Developer"
+    - "Kotlin Developer"
+  locations:
+    - "India"
+    - "Remote"
+  # LinkedIn f_TPR seconds: 86400 = 24h, 604800 = week
+  posted_within: 604800
+  easy_apply_only: true
+  # Skip jobs whose title matches any of these (case-insensitive substrings)
+  exclude_title:
+    - "senior staff"
+    - "intern"
+
+limits:
+  # Hard per-platform daily application caps. Keep conservative.
+  daily_applications:
+    linkedin: 20
+    indeed: 15
+    naukri: 25
+    wellfound: 10
+  # Randomized delay range between actions, seconds
+  action_delay: [2.0, 6.0]
+  # Delay range between submitted applications, seconds
+  application_delay: [45, 120]
+  # Max jobs to pull into the queue per discover run
+  discover_batch: 40
+
+dashboard:
+  host: 127.0.0.1
+  port: 8377
+
+llm:
+  # Phase 2: used for tailoring answers/cover letters
+  provider: anthropic
+  model: claude-sonnet-5

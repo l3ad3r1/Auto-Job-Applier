@@ -1,0 +1,31 @@
+# Copy to profile.yaml and edit. profile.yaml is gitignored — it holds personal data.
+
+identity:
+  first_name: "Your"
+  last_name: "Name"
+  email: "you@example.com"
+  phone_country_code: "+91"
+  phone: "9999999999"
+  city: "Bengaluru, Karnataka, India"
+  linkedin: "https://www.linkedin.com/in/your-handle"
+  website: ""
+
+# Default resume used when no tailored one exists (Phase 2 adds tailoring)
+resume_path: "resumes/default.pdf"
+
+# Answers to common screening questions. Keys are matched against question text
+# (lowercased substring match). Used by prepare step; anything unmatched is
+# flagged for you in the dashboard instead of being guessed.
+answers:
+  "years of experience": "5"
+  "notice period": "30 days"
+  "current ctc": "See resume"
+  "expected ctc": "Negotiable"
+  "willing to relocate": "Yes"
+  "work authorization": "Yes"
+  "require sponsorship": "No"
+  "start date": "Within 30 days"
+
+# Free-text background the LLM can draw on in Phase 2
+summary: >
+  Android developer with Kotlin/Compose experience...

@@ -1,0 +1,23 @@
+# Reference repos (read-only study material)
+_references/
+
+# Runtime data: queue DB, logs, browser sessions
+data/
+profiles/
+
+# Personal info — never commit
+config.yaml
+profile.yaml
+answers.yaml
+resumes/
+*.pdf
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/

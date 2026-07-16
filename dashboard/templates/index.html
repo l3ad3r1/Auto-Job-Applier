@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Job Applier — Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --text:#e6e6e6; --dim:#8b909a;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,Segoe UI,sans-serif;
+         background:var(--bg); color:var(--text); padding:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; color:var(--dim); margin:28px 0 10px;
+       text-transform:uppercase; letter-spacing:.06em; }
+  .counts { color:var(--dim); font-size:13px; margin-bottom:8px; }
+  .counts b { color:var(--text); }
+  .card { background:var(--card); border:1px solid #2a2e37; border-radius:10px;
+          padding:14px 16px; margin-bottom:10px; }
+  .title { font-weight:600; }
+  .title a { color:var(--accent); text-decoration:none; }
+  .meta { color:var(--dim); font-size:13px; margin:2px 0 8px; }
+  .qa { font-size:13px; margin:6px 0; }
+  .qa dt { color:var(--dim); }
+  .qa dd { margin:0 0 6px; }
+  .flag { color:var(--warn); font-size:13px; }
+  .note { color:var(--bad); font-size:13px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  button { border:0; border-radius:6px; padding:6px 14px; font-weight:600;
+           cursor:pointer; }
+  .approve { background:var(--ok); color:#06130a; }
+  .reject  { background:#30363d; color:var(--text); }
+  .bulk { margin-bottom:14px; }
+  .empty { color:var(--dim); font-style:italic; }
+  .pill { font-size:12px; border-radius:99px; padding:1px 9px; background:#30363d; }
+  .sal { color:var(--ok); font-weight:600; }
+  .sal-na { color:var(--dim); font-style:italic; }
+</style>
+</head>
+<body>
+  <h1>Job Applier — Review Queue</h1>
+  <div class="counts">
+    {% for state, n in counts.items() %}<b>{{ n }}</b> {{ state }} &nbsp; {% endfor %}
+  </div>
+
+  <h2>Pending review ({{ pending|length }})</h2>
+  {% if pending %}
+  <form class="bulk row" method="post" action="/decide-all/approve">
+    <button class="approve" type="submit">Approve all (fully answered only)</button>
+  </form>
+  {% endif %}
+  {% for item in pending %}
+  <div class="card">
+    <div class="title"><a href="{{ item.url }}" target="_blank">{{ item.title }}</a>
+      <span class="pill">{{ item.platform }}</span></div>
+    <div class="meta">{{ item.company }} · {{ item.location }} ·
+      {% if item.salary %}<span class="sal">{{ item.salary }}</span>
+      {% else %}<span class="sal-na">salary not disclosed</span>{% endif %}</div>
+    {% if item.answers %}
+    <dl class="qa">
+      {% for question, answer in item.answers.items() %}
+      <dt>{{ question }}</dt><dd>→ {{ answer }}</dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% if item.unanswered %}
+    <div class="flag">⚠ Unanswered: {{ item.unanswered|join(' · ') }} — add to profile.yaml answers, then re-run prepare.</div>
+    {% endif %}
+    <div class="row" style="margin-top:8px">
+      <form method="post" action="/decide/{{ item.app_id }}/approve">
+        <button class="approve" type="submit">Approve</button></form>
+      <form method="post" action="/decide/{{ item.app_id }}/reject">
+        <button class="reject" type="submit">Reject</button></form>
+    </div>
+  </div>
+  {% else %}<div class="empty">Nothing waiting. Run <code>python app.py discover linkedin</code> then <code>prepare</code>.</div>{% endfor %}
+
+  <h2>Approved — ready to submit ({{ approved|length }})</h2>
+  {% for item in approved %}
+  <div class="card"><span class="title">{{ item.title }}</span>
+    <span class="meta"> — {{ item.company }}</span></div>
+  {% else %}<div class="empty">None. Approve items above, then run <code>python app.py apply linkedin</code>.</div>{% endfor %}
+
+  <h2>Recently applied</h2>
+  {% for item in recent %}
+  <div class="card"><span class="title">{{ item.title }}</span>
+    <span class="meta"> — {{ item.company }}</span></div>
+  {% else %}<div class="empty">None yet.</div>{% endfor %}
+
+  {% if failed %}
+  <h2>Failed</h2>
+  {% for item in failed %}
+  <div class="card"><span class="title">{{ item.title }}</span>
+    <span class="meta"> — {{ item.company }}</span>
+    <div class="note">{{ item.notes }}</div></div>
+  {% endfor %}
+  {% endif %}
+</body>
+</html>
