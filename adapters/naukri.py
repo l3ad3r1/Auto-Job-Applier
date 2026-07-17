@@ -138,6 +138,10 @@ class NaukriAdapter(BaseAdapter):
             body = page.locator("body").inner_text(timeout=3000).lower()
         except PWTimeout:
             return False
+        # The success banner reads: Applied to "<job title>" — the quote after
+        # 'applied to' keeps this specific (straight or curly quotes).
+        if re.search(r'applied to ["“‘]', body):
+            return True
         return "successfully applied" in body or "application sent" in body
 
     def _apply_button(self, page: Page) -> Locator | None:
@@ -227,32 +231,64 @@ class NaukriAdapter(BaseAdapter):
                                 drawer.locator("label").all_inner_texts()
                                 if t.strip()] or None
             answer = resolve_answer(question, profile, options=option_texts)
-
-            text_in = drawer.locator(
-                "div[contenteditable='true'], input[type='text'], textarea").first
-            send = drawer.locator(".sendMsg, button:has-text('Save'), "
-                                  "div[class*='send']").first
-
             if answer is None:
                 unanswered.append(question)
                 break  # can't proceed — leave the rest for the user on Naukri
-            if radios.count():
-                target = drawer.locator(f"label:has-text('{answer}')").first
-                if not target.count():
+
+            # Every interaction below is time-boxed and swallowed: a hung click
+            # must fail this question SAFELY (→ unanswered → discard), never
+            # raise a 30s timeout out of apply().
+            try:
+                if radios.count():
+                    target = drawer.locator(f"label:has-text('{answer}')").first
+                    if not target.count():
+                        unanswered.append(question)
+                        break
+                    target.click(timeout=6000)
+                elif not self._fill_chatbot_text(drawer, str(answer)):
                     unanswered.append(question)
                     break
-                target.click()
-            elif text_in.count():
-                text_in.click()
-                text_in.fill(str(answer)) if text_in.evaluate(
-                    "e => e.tagName") != "DIV" else text_in.type(str(answer))
-            else:
+                self._chatbot_send(drawer)
+            except PWTimeout:
                 unanswered.append(question)
                 break
-            if send.count():
-                send.click()
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(1800)
             # Drawer closes when questions are done
-            if not drawer.is_visible():
+            try:
+                if not drawer.is_visible():
+                    break
+            except PWTimeout:
                 break
         return unanswered
+
+    def _fill_chatbot_text(self, drawer: Locator, answer: str) -> bool:
+        """Fill the chatbot's free-text box (input or contenteditable). False on failure."""
+        el = drawer.locator("div[contenteditable='true'], input[type='text'], "
+                            "input:not([type]), textarea").first
+        if not el.count():
+            return False
+        try:
+            if (el.evaluate("e => e.tagName") or "").upper() == "DIV":
+                el.click(timeout=5000)
+                el.type(answer, delay=30, timeout=5000)
+            else:
+                el.fill(answer, timeout=5000)
+            return True
+        except PWTimeout:
+            return False
+
+    def _chatbot_send(self, drawer: Locator) -> None:
+        """Submit the current chatbot answer (Save button, else Enter)."""
+        for sel in (".sendMsg", "button:has-text('Save')", "div[class*='send']"):
+            b = drawer.locator(sel).first
+            if b.count():
+                try:
+                    b.click(timeout=6000)
+                    return
+                except PWTimeout:
+                    continue
+        try:
+            drawer.locator("div[contenteditable='true'], input, textarea").first.press(
+                "Enter", timeout=3000)
+        except PWTimeout:
+            pass
