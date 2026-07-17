@@ -153,6 +153,7 @@ class NaukriAdapter(BaseAdapter):
 
     def apply(self, page: Page, item: QueuedItem, limiter) -> ApplyResult:
         profile = load_profile()
+        self._chatbot_seen = False   # set by _handle_chatbot if a drawer appears
         page.goto(item.job.url, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
@@ -180,23 +181,39 @@ class NaukriAdapter(BaseAdapter):
         page.wait_for_timeout(2000)
 
         if self._applied_marker(page):
-            if unanswered:
-                return ApplyResult(True, f"applied; unanswered chatbot Qs: {unanswered}")
             return ApplyResult(True)
-        if unanswered:
-            page.keyboard.press("Escape")  # close the drawer; nothing was submitted
-            qs = "; ".join(unanswered)
+
+        # A screening chatbot appeared but we couldn't complete it
+        # automatically (free-text recruiter questions aren't auto-filled, by
+        # design — answering them would risk fabrication). Fail safe with an
+        # actionable message: the apply is initiated, but the user must answer
+        # the recruiter's questions on Naukri to actually submit.
+        if self._chatbot_seen or self._chatbot_open(page):
+            try:
+                page.keyboard.press("Escape")
+            except PWTimeout:
+                pass
+            detail = f" ({'; '.join(unanswered)})" if unanswered else ""
             return ApplyResult(
-                False, f"needs manual completion on Naukri (recruiter Q): {qs}")
-        if not self._chatbot_open(page):
-            # No chatbot and no badge — the click may have been swallowed; retry once
-            btn = self._apply_button(page)
-            if btn is not None:
-                self._click_apply(btn)
-                page.wait_for_timeout(5000)
-                unanswered = self._handle_chatbot(page, profile)
-                if self._applied_marker(page):
-                    return ApplyResult(True)
+                False, f"needs manual completion on Naukri - recruiter "
+                       f"screening chatbot{detail}")
+
+        # No chatbot and no badge — the click may have been swallowed; retry once.
+        btn = self._apply_button(page)
+        if btn is not None:
+            self._click_apply(btn)
+            page.wait_for_timeout(5000)
+            self._handle_chatbot(page, profile)
+            if self._applied_marker(page):
+                return ApplyResult(True)
+            if self._chatbot_seen:
+                try:
+                    page.keyboard.press("Escape")
+                except PWTimeout:
+                    pass
+                return ApplyResult(
+                    False, "needs manual completion on Naukri - recruiter "
+                           "screening chatbot")
         return ApplyResult(False, "clicked Apply, no confirmation")
 
     def _click_apply(self, btn: Locator) -> None:
@@ -229,6 +246,7 @@ class NaukriAdapter(BaseAdapter):
             drawer.wait_for(state="visible", timeout=5000)
         except PWTimeout:
             return []  # no chatbot — plain apply
+        self._chatbot_seen = True  # a screening chatbot definitely appeared
 
         # Only radio/choice questions are auto-answered (a click on the user's
         # own option). Free-text recruiter questions are NOT auto-filled from
