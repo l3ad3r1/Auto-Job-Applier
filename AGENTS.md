@@ -17,7 +17,11 @@ python app.py review                 # dashboard at http://127.0.0.1:8377
 python app.py apply <platform> [--limit N]   # submit APPROVED items only
 python app.py login <platform>       # one-time manual sign-in (user only)
 python app.py doctor                 # read-only health canary (exit 1 = unhealthy)
+python app.py sync-sheet             # append applied jobs to the Google Sheet
 ```
+
+The daily `routine` auto-appends new applications to the Google Sheet when
+`sheets.enabled` is set in config (no-op otherwise); no agent action needed.
 
 Discovery and apply open a real browser and take minutes — run them one at a
 time with generous timeouts, never in parallel.

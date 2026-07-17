@@ -82,6 +82,10 @@ class Queue:
         if "retry_count" not in acols:
             self.conn.execute(
                 "ALTER TABLE applications ADD COLUMN retry_count INTEGER DEFAULT 0")
+        if "synced_at" not in acols:
+            # When this application was appended to the Google Sheet (NULL = not yet)
+            self.conn.execute(
+                "ALTER TABLE applications ADD COLUMN synced_at TEXT DEFAULT ''")
         self.conn.commit()
 
     # -- discovery -----------------------------------------------------------
@@ -212,6 +216,20 @@ class Queue:
                JOIN jobs j ON j.id = a.job_id WHERE a.id=?""", (app_id,),
         ).fetchone()
         return self._row_to_item(row) if row else None
+
+    def unsynced_applied(self) -> list[QueuedItem]:
+        """APPLIED items not yet appended to the Google Sheet, oldest first."""
+        rows = self.conn.execute(
+            """SELECT a.id app_id, a.*, j.* FROM applications a
+               JOIN jobs j ON j.id = a.job_id
+               WHERE a.state=? AND IFNULL(a.synced_at,'')=''
+               ORDER BY a.updated_at ASC""", (State.APPLIED.value,))
+        return [self._row_to_item(r) for r in rows]
+
+    def mark_synced(self, app_id: int) -> None:
+        self.conn.execute("UPDATE applications SET synced_at=? WHERE id=?",
+                          (utcnow(), app_id))
+        self.conn.commit()
 
     def counts(self) -> dict[str, int]:
         rows = self.conn.execute(

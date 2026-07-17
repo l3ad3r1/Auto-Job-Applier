@@ -37,3 +37,10 @@ llm:
   # Phase 2: used for tailoring answers/cover letters
   provider: anthropic
   model: claude-sonnet-5
+
+sheets:
+  # Auto-append newly-applied jobs to a Google Sheet from the daily routine.
+  # One-time setup (no Google Cloud / service account): see hermes/sheets-setup.md
+  enabled: false
+  webhook_url: ""        # Google Apps Script web-app URL (ends in /exec)
+  secret: ""             # shared secret; must match the SECRET in the Apps Script

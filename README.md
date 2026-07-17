@@ -59,7 +59,16 @@ python app.py prepare             # score vs job spec + draft answers
 python app.py review              # dashboard at http://127.0.0.1:8377
 python app.py apply linkedin      # submit ONLY what you approved
 python app.py status              # queue counts
+python app.py export              # applied jobs -> data/applied_jobs.csv
+python app.py sync-sheet          # append applied jobs to your Google Sheet
 ```
+
+### Google Sheet auto-append (optional)
+
+Mirror every application into a Google Sheet with no Google Cloud project or
+service account — a small Apps Script webhook does it. The daily routine
+appends new applications automatically (and never duplicates). One-time setup:
+[hermes/sheets-setup.md](hermes/sheets-setup.md).
 
 (`python` = `.venv/Scripts/python.exe` on Windows, `.venv/bin/python`
 elsewhere.)

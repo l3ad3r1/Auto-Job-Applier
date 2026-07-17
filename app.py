@@ -8,6 +8,8 @@
   python app.py status               queue counts
   python app.py doctor               per-platform health canary (read-only)
   python app.py routine              deterministic one-shot daily run (for cron)
+  python app.py export               write applied jobs to data/applied_jobs.csv
+  python app.py sync-sheet           append new applied jobs to the Google Sheet
 """
 from __future__ import annotations
 
@@ -229,6 +231,12 @@ def _applied_rows() -> list[list[str]]:
     return rows
 
 
+def cmd_sync_sheet() -> None:
+    """Append not-yet-synced applied jobs to the configured Google Sheet."""
+    from core.sheets import sync_applied
+    print(sync_applied(load_config()))
+
+
 def cmd_export() -> None:
     """Write applied jobs to data/applied_jobs.csv (for Sheets/Excel import)."""
     import csv
@@ -307,7 +315,13 @@ def cmd_routine() -> None:
                 clean = line.strip().lstrip("→ ").strip().replace("✓", "(applied)")
                 applied_lines.append(f"  {clean}")
 
-    # 5. Compose report from the queue's own truth.
+    # 5. Append any new applications to the Google Sheet (no-op if unconfigured).
+    from core.sheets import sync_applied
+    sheet_status = sync_applied(load_config(), queue)
+    if "disabled" not in sheet_status and "no webhook" not in sheet_status:
+        report.append(sheet_status)
+
+    # 6. Compose report from the queue's own truth.
     counts = queue.counts()
     pending = counts.get(State.PENDING_REVIEW.value, 0)
     applied_total = counts.get(State.APPLIED.value, 0)
@@ -342,6 +356,7 @@ def main() -> None:
     sub.add_parser("doctor")
     sub.add_parser("routine")
     sub.add_parser("export")
+    sub.add_parser("sync-sheet")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -362,6 +377,8 @@ def main() -> None:
         cmd_routine()
     elif args.cmd == "export":
         cmd_export()
+    elif args.cmd == "sync-sheet":
+        cmd_sync_sheet()
 
 
 if __name__ == "__main__":
