@@ -214,6 +214,33 @@ def cmd_status() -> None:
         print(f"  {state:>15}: {n}")
 
 
+APPLIED_COLUMNS = ["Date Applied", "Platform", "Title", "Company",
+                   "Location", "Salary", "URL"]
+
+
+def _applied_rows() -> list[list[str]]:
+    q = Queue()
+    rows = []
+    for i in sorted(q.items(State.APPLIED), key=lambda x: x.application.updated_at):
+        rows.append([
+            i.application.updated_at[:10], i.job.platform, i.job.title,
+            i.job.company, i.job.location, i.job.salary or "", i.job.url,
+        ])
+    return rows
+
+
+def cmd_export() -> None:
+    """Write applied jobs to data/applied_jobs.csv (for Sheets/Excel import)."""
+    import csv
+    out = ROOT / "data" / "applied_jobs.csv"
+    rows = _applied_rows()
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(APPLIED_COLUMNS)
+        w.writerows(rows)
+    print(f"Exported {len(rows)} applied jobs -> {out}")
+
+
 ALL_PLATFORMS = ("linkedin", "naukri", "indeed")
 
 
@@ -314,6 +341,7 @@ def main() -> None:
     sub.add_parser("status")
     sub.add_parser("doctor")
     sub.add_parser("routine")
+    sub.add_parser("export")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -332,6 +360,8 @@ def main() -> None:
         cmd_doctor()
     elif args.cmd == "routine":
         cmd_routine()
+    elif args.cmd == "export":
+        cmd_export()
 
 
 if __name__ == "__main__":
