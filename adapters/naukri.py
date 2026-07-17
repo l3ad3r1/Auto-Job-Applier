@@ -171,7 +171,7 @@ class NaukriAdapter(BaseAdapter):
             return ApplyResult(False, "Apply button never became visible")
         limiter.action_delay()
         btn.scroll_into_view_if_needed()
-        btn.click()
+        self._click_apply(btn)
         page.wait_for_timeout(5000)
 
         # Some jobs apply instantly; others open a pre-apply chatbot whose
@@ -185,17 +185,32 @@ class NaukriAdapter(BaseAdapter):
             return ApplyResult(True)
         if unanswered:
             page.keyboard.press("Escape")  # close the drawer; nothing was submitted
-            return ApplyResult(False, f"chatbot blocked on: {unanswered}")
+            qs = "; ".join(unanswered)
+            return ApplyResult(
+                False, f"needs manual completion on Naukri (recruiter Q): {qs}")
         if not self._chatbot_open(page):
             # No chatbot and no badge — the click may have been swallowed; retry once
             btn = self._apply_button(page)
             if btn is not None:
-                btn.click()
+                self._click_apply(btn)
                 page.wait_for_timeout(5000)
                 unanswered = self._handle_chatbot(page, profile)
                 if self._applied_marker(page):
                     return ApplyResult(True)
         return ApplyResult(False, "clicked Apply, no confirmation")
+
+    def _click_apply(self, btn: Locator) -> None:
+        """Click the Apply button, tolerating the post-click timeout Naukri trips.
+
+        Clicking Apply often opens the screening chatbot, whose overlay then
+        covers the button and fails Playwright's post-click actionability
+        re-check — raising a 30s timeout even though the click registered.
+        Swallow it; the caller's chatbot/applied-marker checks establish truth.
+        """
+        try:
+            btn.click(timeout=8000)
+        except PWTimeout:
+            pass
 
     def _chatbot_open(self, page: Page) -> bool:
         return page.locator("div[id*='ChatbotContainer' i], div[class*='chatbotcontainer' i], "
@@ -215,67 +230,54 @@ class NaukriAdapter(BaseAdapter):
         except PWTimeout:
             return []  # no chatbot — plain apply
 
+        # Only radio/choice questions are auto-answered (a click on the user's
+        # own option). Free-text recruiter questions are NOT auto-filled from
+        # the LLM — answering "years in Branch Sales?" or "10th percentage?"
+        # on a real application risks fabrication. Those are flagged for the
+        # user to complete manually on Naukri.
         unanswered: list[str] = []
+        prev_question = None
         for _ in range(10):  # one iteration per question
             page.wait_for_timeout(2000)
             msgs = drawer.locator(".botMsg, [class*='botMsg']").all()
             if not msgs:
                 break
             question = " ".join((msgs[-1].inner_text() or "").split())
-            if not question:
+            if not question or question == prev_question:
+                # No new question / our answer didn't advance it — stop looping.
+                if question and question not in unanswered:
+                    unanswered.append(question)
                 break
+            prev_question = question
+
             radios = drawer.locator("input[type='radio']")
-            option_texts = None
-            if radios.count():
-                option_texts = [t.strip() for t in
-                                drawer.locator("label").all_inner_texts()
-                                if t.strip()] or None
+            if not radios.count():
+                unanswered.append(question)  # free text — user completes it
+                break
+            option_texts = [t.strip() for t in
+                            drawer.locator("label").all_inner_texts()
+                            if t.strip()] or None
             answer = resolve_answer(question, profile, options=option_texts)
             if answer is None:
                 unanswered.append(question)
-                break  # can't proceed — leave the rest for the user on Naukri
-
-            # Every interaction below is time-boxed and swallowed: a hung click
-            # must fail this question SAFELY (→ unanswered → discard), never
-            # raise a 30s timeout out of apply().
+                break
             try:
-                if radios.count():
-                    target = drawer.locator(f"label:has-text('{answer}')").first
-                    if not target.count():
-                        unanswered.append(question)
-                        break
-                    target.click(timeout=6000)
-                elif not self._fill_chatbot_text(drawer, str(answer)):
+                target = drawer.locator(f"label:has-text('{answer}')").first
+                if not target.count():
                     unanswered.append(question)
                     break
+                target.click(timeout=6000)
                 self._chatbot_send(drawer)
             except PWTimeout:
                 unanswered.append(question)
                 break
             page.wait_for_timeout(1800)
-            # Drawer closes when questions are done
             try:
                 if not drawer.is_visible():
                     break
             except PWTimeout:
                 break
         return unanswered
-
-    def _fill_chatbot_text(self, drawer: Locator, answer: str) -> bool:
-        """Fill the chatbot's free-text box (input or contenteditable). False on failure."""
-        el = drawer.locator("div[contenteditable='true'], input[type='text'], "
-                            "input:not([type]), textarea").first
-        if not el.count():
-            return False
-        try:
-            if (el.evaluate("e => e.tagName") or "").upper() == "DIV":
-                el.click(timeout=5000)
-                el.type(answer, delay=30, timeout=5000)
-            else:
-                el.fill(answer, timeout=5000)
-            return True
-        except PWTimeout:
-            return False
 
     def _chatbot_send(self, drawer: Locator) -> None:
         """Submit the current chatbot answer (Save button, else Enter)."""
