@@ -43,6 +43,7 @@ def sync_applied(config: dict, queue: Queue | None = None) -> str:
 
     payload = {
         "secret": cfg.get("secret", ""),
+        "title": cfg.get("title", ""),   # rename the sheet if set (blank = leave as-is)
         "columns": COLUMNS,
         "rows": [_row(i) for i in pending],
     }

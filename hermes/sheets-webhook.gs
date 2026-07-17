@@ -16,6 +16,11 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(TAB) || ss.getSheets()[0];
 
+    // Name the spreadsheet if a title is supplied and differs.
+    if (body.title && ss.getName() !== body.title) {
+      ss.rename(body.title);
+    }
+
     // Write the header row once, on an empty sheet.
     if (sheet.getLastRow() === 0 && body.columns) {
       sheet.appendRow(body.columns);

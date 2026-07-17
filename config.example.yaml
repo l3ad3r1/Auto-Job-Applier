@@ -44,3 +44,4 @@ sheets:
   enabled: false
   webhook_url: ""        # Google Apps Script web-app URL (ends in /exec)
   secret: ""             # shared secret; must match the SECRET in the Apps Script
+  title: ""              # optional: webhook renames the sheet to this on sync

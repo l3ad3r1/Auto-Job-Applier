@@ -27,6 +27,7 @@ sheets:
   enabled: true
   webhook_url: "https://script.google.com/macros/s/AKfy…/exec"
   secret: "the-same-SECRET-you-set-in-the-script"
+  title: "Job Applications"   # optional; the webhook renames the sheet to this
 ```
 
 ## 3. Backfill + verify
