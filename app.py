@@ -7,17 +7,22 @@
   python app.py apply <platform>     submit APPROVED applications (paced, capped)
   python app.py status               queue counts
   python app.py doctor               per-platform health canary (read-only)
+  python app.py routine              deterministic one-shot daily run (for cron)
 """
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+from pathlib import Path
 
 from adapters import get_adapter
 from core.models import State
 from core.profile import load_config, load_profile, match_answer
 from core.queue import Queue
 from safety import CapReached, Limiter
+
+ROOT = Path(__file__).resolve().parent
 
 
 def cmd_login(platform: str) -> None:
@@ -209,6 +214,89 @@ def cmd_status() -> None:
         print(f"  {state:>15}: {n}")
 
 
+ALL_PLATFORMS = ("linkedin", "naukri", "indeed")
+
+
+def _run_step(args: list[str], timeout: int) -> tuple[int, str]:
+    """Run an app.py subcommand as an isolated subprocess.
+
+    Isolation matters: a step that calls sys.exit (e.g. 'not logged in')
+    or crashes its browser must not take down the whole routine.
+    """
+    try:
+        p = subprocess.run([sys.executable, "app.py", *args], cwd=str(ROOT),
+                           capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 1, f"step {' '.join(args)} timed out after {timeout}s"
+    except Exception as e:  # noqa: BLE001 — routine must never raise
+        return 1, f"step {' '.join(args)} error: {type(e).__name__}: {e}"
+
+
+def cmd_routine() -> None:
+    """Deterministic one-shot daily routine for unattended (cron) use.
+
+    doctor → discover healthy platforms → prepare → apply approved. Prints a
+    concise Telegram-friendly report to stdout and always exits 0 — no LLM
+    orchestration, so nothing here can hang or refuse. Screening answers still
+    use the local LLM inside `apply`, which degrades gracefully to flagging.
+    """
+    queue = Queue()
+    # ASCII-only report — it traverses Python -> bash -> Hermes -> Telegram;
+    # non-ASCII risks mojibake somewhere in that chain.
+    report: list[str] = ["Job Applier - daily run"]
+
+    # 1. Health canary — skip unhealthy platforms rather than abort the run.
+    _, doc_out = _run_step(["doctor"], timeout=900)
+    healthy = [p for p in ALL_PLATFORMS if f"{p}: OK" in doc_out]
+    unhealthy = [p for p in ALL_PLATFORMS if p not in healthy]
+    if unhealthy:
+        for line in doc_out.splitlines():
+            if line.strip().startswith("!"):
+                report.append(f"[!] {line.strip().lstrip('! ').strip()}")
+    if "llm: DEGRADED" in doc_out:
+        report.append("[!] local LLM unreachable - unmatched questions flagged")
+    if not healthy:
+        report.append("[X] No healthy platforms this run. Check sessions/selectors.")
+        print("\n".join(report))
+        return
+
+    # 2. Discover on each healthy platform (sequential; own browser each).
+    for platform in healthy:
+        _run_step(["discover", platform], timeout=1200)
+
+    # 3. Score + draft answers.
+    _run_step(["prepare"], timeout=600)
+
+    # 4. Submit anything the user already approved (caps enforced inside apply).
+    applied_lines: list[str] = []
+    for platform in ALL_PLATFORMS:
+        approved = queue.items(State.APPROVED, platform=platform)
+        if not approved:
+            continue
+        _, out = _run_step(["apply", platform], timeout=1800)
+        for line in out.splitlines():
+            if "applied ✓" in line or "failed:" in line or "will retry" in line:
+                clean = line.strip().lstrip("→ ").strip().replace("✓", "(applied)")
+                applied_lines.append(f"  {clean}")
+
+    # 5. Compose report from the queue's own truth.
+    counts = queue.counts()
+    pending = counts.get(State.PENDING_REVIEW.value, 0)
+    applied_total = counts.get(State.APPLIED.value, 0)
+    report.append(f"Platforms run: {', '.join(healthy)}")
+    if applied_lines:
+        report.append("Submitted this run:")
+        report.extend(applied_lines)
+    else:
+        report.append("No approved items to submit (approve some in the dashboard).")
+    report.append(f"{pending} pending your review | {applied_total} applied all-time")
+    if pending:
+        report.append("Review: python app.py review -> http://127.0.0.1:8377")
+    # Final safety net: guarantee ASCII regardless of captured subprocess text.
+    print("\n".join(report).encode("ascii", "replace").decode("ascii"))
+
+
 def main() -> None:
     # Windows consoles often default to cp1252; our output uses arrows/ticks
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -225,6 +313,7 @@ def main() -> None:
     sub.add_parser("review")
     sub.add_parser("status")
     sub.add_parser("doctor")
+    sub.add_parser("routine")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -241,6 +330,8 @@ def main() -> None:
         cmd_status()
     elif args.cmd == "doctor":
         cmd_doctor()
+    elif args.cmd == "routine":
+        cmd_routine()
 
 
 if __name__ == "__main__":
