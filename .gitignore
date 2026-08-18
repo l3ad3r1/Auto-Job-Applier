@@ -11,6 +11,9 @@ profile.yaml
 answers.yaml
 resumes/
 *.pdf
+config.yaml.bak*
+profile.yaml.bak*
+RUNBOOK.md
 
 # Secrets
 .env

@@ -11,7 +11,7 @@ bash directory (Git/cmd holds git.exe but not bash.exe), so `bash` resolves to
 the WSL launcher at C:/Windows/system32/bash.exe. WSL's bash strips the
 backslashes out of the Windows script path and dies with exit 127:
 
-    /bin/bash: C:UsersrenjaAppDataLocalhermes...: No such file or directory
+    /bin/bash: C:Users<user>AppDataLocalhermes...: No such file or directory
 
 The scheduler's .py branch runs scripts with Hermes's own interpreter and never
 consults PATH, so this wrapper is immune to which-bash-wins. Keep it as .py.

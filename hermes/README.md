@@ -39,7 +39,7 @@ cp hermes/job-applier-routine.py \
 > (`Git/cmd` ships `git.exe` but not `bash.exe`), so `bash` resolves to
 > the WSL launcher at `C:/Windows/system32/bash.exe`. WSL's bash strips
 > the backslashes out of the Windows script path and exits 127:
-> `/bin/bash: C:UsersrenjaAppDataLocalhermes...: No such file or directory`.
+> `/bin/bash: C:Users<user>AppDataLocalhermes...: No such file or directory`.
 > The `.py` branch runs the script with Hermes's own interpreter and
 > never consults PATH. `job-applier-routine.sh` is kept for reference only.
 
@@ -68,6 +68,27 @@ Set `deliver` to an **explicit** target (`"telegram:<chat-id>"`); a bare
 The watchdog alert is the only signal a broken run produces, so if runs
 go quiet, check the job's `last_status` and `last_error` in the profile's
 `cron/jobs.json`.
+
+## Nightly watchdog
+
+A second no_agent job runs at 21:00, three hours after the evening applier run,
+and reports to the same Telegram target:
+
+```bash
+hermes cron create "0 21 * * *" --name "Job applier nightly watchdog"   --script job-applier-monitor.py --no-agent   --deliver "telegram:<chat-id>" --workdir /path/to/job-applier
+```
+
+It exists because a broken cron is otherwise silent — an earlier outage ran for
+nine days unnoticed. [job-applier-monitor.py](job-applier-monitor.py) checks the
+applier job's last status, consecutive failures, staleness (no run in 26h),
+delivery errors, whether Ollama actually has the configured model, and today's
+failed applications.
+
+It auto-repairs only drift with a single known-correct fix — job disabled or
+paused, `script` pointing at the wrong file, wrapper missing from the scripts
+dir (redeployed from this directory). Everything else is reported with a
+diagnosis rather than guessed at. It never touches the review queue, never
+approves or submits, and never exits non-zero.
 
 ## Agent + skill mode
 
