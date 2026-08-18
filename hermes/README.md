@@ -28,9 +28,20 @@ Deploy the wrapper to the **active profile's** scripts dir (Hermes resolves
 cron scripts there, not root `HERMES_HOME/scripts`):
 
 ```bash
-cp hermes/job-applier-routine.sh \
-   "$LOCALAPPDATA/hermes/profiles/<profile>/scripts/job-applier-routine.sh"
+cp hermes/job-applier-routine.py \
+   "$LOCALAPPDATA/hermes/profiles/<profile>/scripts/job-applier-routine.py"
 ```
+
+> **Use the `.py` wrapper, not the `.sh` one.** Hermes picks a cron
+> script's interpreter by extension, and for `.sh` it runs
+> `shutil.which("bash")`. The gateway starts at boot with the persisted
+> machine PATH, which on Windows often has no Git bash directory
+> (`Git/cmd` ships `git.exe` but not `bash.exe`), so `bash` resolves to
+> the WSL launcher at `C:/Windows/system32/bash.exe`. WSL's bash strips
+> the backslashes out of the Windows script path and exits 127:
+> `/bin/bash: C:UsersrenjaAppDataLocalhermes...: No such file or directory`.
+> The `.py` branch runs the script with Hermes's own interpreter and
+> never consults PATH. `job-applier-routine.sh` is kept for reference only.
 
 Create the job, then flip it to no_agent script mode in the profile's
 `cron/jobs.json`:
@@ -40,7 +51,7 @@ Create the job, then flip it to no_agent script mode in the profile's
   "id": "<job-id>",
   "schedule": { "kind": "cron", "expr": "0 9,18 * * *" },
   "no_agent": true,
-  "script": "job-applier-routine.sh",
+  "script": "job-applier-routine.py",
   "workdir": "E:/claude-projects/job-applier",
   "provider": null, "model": null, "base_url": null,   // no agent LLM needed
   "delivery": "telegram"
@@ -50,6 +61,13 @@ Create the job, then flip it to no_agent script mode in the profile's
 Hermes delivers the script's stdout to Telegram; if the script exits non-zero
 it delivers a "⚠ watchdog failed" alert instead — so a broken run is never
 silent. Script timeout is 3600s (ample for three-platform discovery).
+
+Set `deliver` to an **explicit** target (`"telegram:<chat-id>"`); a bare
+`"telegram"` fails with "no delivery target resolved".
+
+The watchdog alert is the only signal a broken run produces, so if runs
+go quiet, check the job's `last_status` and `last_error` in the profile's
+`cron/jobs.json`.
 
 ## Agent + skill mode
 
