@@ -24,7 +24,7 @@ import os
 import sqlite3
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Derived from the environment rather than hardcoded, so this file carries no
@@ -42,6 +42,16 @@ CONFIG = REPO / "config.yaml"
 APPLIER_JOB_ID = "999b6a016167"
 WRAPPER = "job-applier-routine.py"
 OLLAMA_TAGS = "http://127.0.0.1:11434/api/tags"
+
+# One-time cap restore. On 2026-08-18 a bulk approval of 108 items forced the
+# daily caps down so the backlog would spread over three days; the user asked
+# for the original caps back once it drained. Fires only when the approved
+# backlog is actually empty, so a stalled or slow drain never un-throttles
+# mid-batch. THROTTLED_CAPS is matched exactly before writing, so a manual
+# change to any of these numbers cancels the restore rather than overriding it.
+RESTORE_CAPS_AFTER = date(2026, 8, 20)
+THROTTLED_CAPS = {"linkedin": 14, "indeed": 5, "naukri": 18}
+ORIGINAL_CAPS = {"linkedin": 20, "indeed": 15, "naukri": 25}
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -200,11 +210,11 @@ def check_llm() -> None:
             "- screening answers will be flagged (pick one and update config.yaml llm.model)")
 
 
-def check_queue() -> None:
-    """Report the backlog and how long it takes to drain at current caps."""
+def check_queue() -> int:
+    """Report the backlog. Returns the approved total, for the cap-restore check."""
     if not QUEUE_DB.exists():
         problems.append(f"queue db missing at {QUEUE_DB}")
-        return
+        return 0
     try:
         con = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
         counts = dict(con.execute("select state,count(*) from applications group by state"))
@@ -217,7 +227,7 @@ def check_queue() -> None:
         con.close()
     except Exception as e:
         problems.append(f"cannot read queue db ({e})")
-        return
+        return 0
 
     notes.append(f"submitted today: {sent_today}")
     notes.append(
@@ -226,7 +236,7 @@ def check_queue() -> None:
         f"{counts.get('failed', 0)} failed")
 
     if not approved:
-        return
+        return 0
     try:
         import yaml
         caps = ((yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {})
@@ -235,6 +245,77 @@ def check_queue() -> None:
         notes.append(f"approved backlog drains in ~{days} more day(s) at current caps")
     except Exception:
         pass
+    return sum(approved.values())
+
+
+def _read_caps() -> dict:
+    try:
+        import yaml
+        cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8")) or {}
+        raw = (cfg.get("limits", {}) or {}).get("daily_applications", {}) or {}
+        return {k: int(v) for k, v in raw.items()}
+    except Exception:
+        return {}
+
+
+def maybe_restore_caps(approved_total: int) -> None:
+    """Put the daily caps back once the throttled backlog has drained.
+
+    Edits config.yaml line-by-line rather than round-tripping it through yaml
+    so the file's comments survive. This is the one place the watchdog changes
+    application behaviour, so every guard has to hold: the date has passed, the
+    backlog is empty, and the caps are still exactly the throttled values.
+    """
+    if datetime.now(IST).date() <= RESTORE_CAPS_AFTER:
+        return
+    caps = _read_caps()
+    if not caps or any(caps.get(k) != v for k, v in THROTTLED_CAPS.items()):
+        return  # already restored, or hand-tuned since — leave it alone
+    if approved_total > 0:
+        notes.append(
+            f"caps still throttled: {approved_total} approved left to drain first")
+        return
+
+    try:
+        lines = CONFIG.read_text(encoding="utf-8").split("\n")
+    except Exception as e:
+        problems.append(f"cap restore failed reading config.yaml ({e})")
+        return
+
+    out, in_caps, changed = [], False, 0
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped == "daily_applications:":
+            in_caps = True
+            out.append(ln)
+            continue
+        if in_caps:
+            key = stripped.split(":")[0]
+            if key in ORIGINAL_CAPS:
+                indent = ln[: len(ln) - len(ln.lstrip())]
+                out.append(f"{indent}{key}: {ORIGINAL_CAPS[key]}")
+                changed += 1
+                continue
+            if stripped and not stripped.startswith("#") and stripped.endswith(":"):
+                in_caps = False
+        out.append(ln)
+
+    if changed != len(ORIGINAL_CAPS):
+        problems.append(
+            f"cap restore aborted: matched {changed}/{len(ORIGINAL_CAPS)} entries "
+            "in config.yaml, restore by hand")
+        return
+
+    try:
+        tmp = CONFIG.with_suffix(".yaml.monitor-tmp")
+        tmp.write_text("\n".join(out), encoding="utf-8")
+        os.replace(tmp, CONFIG)
+    except Exception as e:
+        problems.append(f"cap restore failed writing config.yaml ({e})")
+        return
+
+    restored = ", ".join(f"{k} {v}" for k, v in ORIGINAL_CAPS.items())
+    repairs.append(f"backlog drained -> daily caps restored to {restored}")
 
 
 def check_failed_applications() -> None:
@@ -264,7 +345,8 @@ def main() -> int:
         check_last_run(job)
         check_recent_executions()
     check_llm()
-    check_queue()
+    approved_total = check_queue()
+    maybe_restore_caps(approved_total)
     check_failed_applications()
 
     if repairs:
