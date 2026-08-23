@@ -4,6 +4,12 @@ These instructions apply to ANY coding agent driving this pipeline (Codex,
 Cursor, Claude Code, Hermes, ...). The pipeline itself does the heavy lifting;
 your job is to run CLI commands, interpret results, and report.
 
+**New here? Read [CODEX.md](CODEX.md) first** — it explains how the system fits
+together, how the Hermes scheduler drives it, the maintenance playbook, and the
+credentials model. This file is the operating rules; CODEX.md is the context
+behind them. Machine-specific values (cron job IDs, absolute paths) are in
+`RUNBOOK.md`, which is gitignored and local-only.
+
 ## Commands
 
 Run from the repo root with the venv Python (`python` below means
@@ -18,6 +24,8 @@ python app.py apply <platform> [--limit N]   # submit APPROVED items only
 python app.py login <platform>       # one-time manual sign-in (user only)
 python app.py doctor                 # read-only health canary (exit 1 = unhealthy)
 python app.py sync-sheet             # append applied jobs to the Google Sheet
+python app.py job-board              # rebuild the detailed local Excel job board
+python app.py retire-stale [--days N] # expire old pending-review listings only
 ```
 
 The daily `routine` auto-appends new applications to the Google Sheet when
@@ -33,11 +41,15 @@ time with generous timeouts, never in parallel.
    at the top of your report. Do not abort the whole run for one platform.
 2. `discover` each healthy platform, sequentially.
 3. `prepare`.
-4. `status` — report pending_review count; remind the user to approve in the
+4. `retire-stale` — retire pending-review listings older than 14 days as
+   `expired`; never touch approved items.
+5. `status` — report pending_review count; remind the user to approve in the
    dashboard.
-5. Only if approved items exist: `apply` per platform; report each result
+6. Only if approved items exist: `apply` per platform; report each result
    verbatim. Failures marked "transient, will retry" are re-attempted
    automatically on the next run (max 2 retries) — report them but don't act.
+7. `job-board` — rebuild the Excel board after every 09:00 and 18:00 run.
+   The 21:00 watchdog verifies its freshness, structure, and queue totals.
 
 ## Hard rules
 
