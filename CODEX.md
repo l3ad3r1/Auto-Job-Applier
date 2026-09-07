@@ -17,27 +17,53 @@ This repo is **public**. Machine-specific and personal values live in
 `RUNBOOK.md` and `config.yaml`, both gitignored. Keep it that way — never move
 a secret, chat ID, or absolute user path into a committed file.
 
+Last updated: 2026-09-07.
+
 ---
 
 ## 1. What the system does
 
 Rinu is a sales leader in Hyderabad (Branch Manager / Sales Manager / KAM / BDM
 roles, no relocation). This tool finds matching jobs, drafts the screening
-answers, and submits **only what a human has approved**.
+answers, and submits them.
 
 ```
-discover  →  prepare  →  [HUMAN APPROVES]  →  apply  →  sync-sheet
- scrape       score vs      review UI at        submit      append to
- listings     job spec,     127.0.0.1:8377      paced +     Google Sheet
- into queue   draft answers                     capped
+discover  →  prepare  →  auto-approve  →  apply  →  sync-sheet
+ scrape       score vs     strong ones      submit     append to
+ listings     job spec,    skip review      paced +    Google Sheet
+ into queue   draft answers      ↑          capped
+                          everything else waits
+                          for the dashboard at
+                          127.0.0.1:8377
 ```
 
-The human gate is the whole design. Nothing is ever submitted that the user did
-not explicitly approve in the dashboard. An agent's job is to run the CLI,
-interpret results, and report — never to approve.
+> **The human review gate is no longer absolute.** It was, until 2026-09-03,
+> when the owner deliberately turned it off for strong matches: waiting for a
+> twice-daily run meant listings expired before they were applied to. Jobs at or
+> above `auto_apply.min_score` are now promoted straight to APPROVED and
+> submitted **with nobody having read them**. This is the owner's decision, made
+> with the trade-off stated; it is not an invitation to widen it further.
+>
+> Everything below that bar still waits for a human in the dashboard, and the
+> rule for *you* is unchanged: **an agent never approves anything.** Your job is
+> to run the CLI, interpret results, and report. See §5.
+
+Auto-apply rails, all enforced in `cmd_auto_approve` before anything is
+promoted: score at or above the platform's bar, **zero unanswered screening
+questions** (never guess on a real application), easy-apply only, and
+`daily_max` unreviewed promotions per day on top of the normal per-platform
+caps in `safety.py`. Every promoted row is stamped in the `auto_approved`
+column, so unreviewed submissions can always be told apart from human-approved
+ones — including after a failure overwrites `notes`.
 
 Platforms: **LinkedIn** (Easy Apply), **Naukri**, **Indeed**. Wellfound is
 configured but unused (tech boards, no market fit).
+
+Scheduled LinkedIn discovery uses a focused preset: keyword `Hiring`, posted
+within the last 24 hours, and Easy Apply only. The normal manual discovery
+command remains available. Focused results are tagged in SQLite and listed on
+the Excel workbook's `Today's Hiring` sheet after profile matching. The tag is
+discovery metadata only; it never bypasses human approval.
 
 ### Data model
 
@@ -52,6 +78,31 @@ One SQLite file, `data/queue.db` (gitignored):
 
 States: `pending_review → approved → applied`, plus `skipped`, `rejected`,
 `failed`.
+
+Columns added later, all with a "not captured" sentinel so older rows degrade
+rather than rank badly: `jobs.posted_age_days` and `jobs.applicants` (`-1`
+= unknown), and `applications.auto_approved` (empty = human-approved).
+
+> **Put durable metadata in its own column, never in `notes`.** The auto-apply
+> marker lived in `notes` for one afternoon. `set_state` *overwrites* `notes`,
+> so a failure erased the marker — losing attribution for exactly the rows worth
+> attributing, and under-counting the `daily_max` ceiling so extra unreviewed
+> applications could slip through.
+
+### Scoring
+
+`core/matching.py` ranks jobs **0–100**: title fit 0–40 (graded by phrase
+specificity, match position, seniority markers), freshness 0–25, easy-apply 15,
+location 10, pay 6, domain 8, crowding ±4; a reject phrase or pay below the
+floor hard-fails at −50. Thresholds: `job_spec.min_score` to reach review,
+`auto_apply.min_score` (+ `min_score_by_platform`) to skip it.
+
+It replaced a scorer that gave a flat +4 for any title substring hit, under
+which **88% of the queue scored exactly 6 or 7** — a score-9 job failed to apply
+on the same run two score-6 jobs succeeded. The root cause was data starvation,
+not weights: 76% of rows have no description at all, so the industry bonus
+almost never fired. If ranking looks wrong, check what the adapters actually
+capture before touching the weights.
 
 > **The dedupe trap.** Discovery inserts with `INSERT OR IGNORE` against
 > `UNIQUE(platform, external_id)`. That uniqueness is the *only* thing stopping
@@ -148,12 +199,46 @@ The watchdog **cannot** catch this, because it needs the same gateway. Diagnose:
 
 ```bash
 hermes cron list                    # next_run_at in the past = scheduler not ticking
-tasklist | grep -i hermes           # zero processes = gateway down
+hermes gateway status               # authoritative: reads the gateway's pid file
 hermes gateway run                  # restart it
 ```
 
-A durable fix (Windows service or scheduled task at logon) is **not yet done**
-and is the highest-value outstanding work on this system.
+**Auto-start since 2026-09-07:** use Hermes's own installer, not a hand-rolled
+task.
+
+```bash
+hermes gateway install --start-on-login   # the supported way
+hermes gateway status                     # authoritative liveness check
+```
+
+Without admin it falls back from a Scheduled Task to a Startup-folder `.vbs`
+(`%APPDATA%\...\Startup\Hermes_Gateway_<profile>.vbs`), which is windowless.
+That covers login and reboot but **not a mid-session crash**, which is the
+common case here.
+
+[hermes/gateway-guard.py](hermes/gateway-guard.py) covers crashes: it starts the
+gateway when `hermes gateway status` says it is down, never kills anything, and
+logs only when it acts. It is **not currently registered** — register it with
+`pythonw.exe` (no console) if crash recovery is wanted:
+
+```bash
+schtasks /create /tn "Hermes Gateway Guard" /sc minute /mo 15 /f   /tr "<repo>\.venv\Scripts\pythonw.exe <repo>\hermes\gateway-guard.py"
+```
+
+To stop Hermes deliberately, create `gateway-guard.disabled` in the profile dir
+rather than deleting the task.
+
+> **Never schedule `powershell.exe` for a frequent background task.** The first
+> version did, and Task Scheduler allocates a console even with
+> `-WindowStyle Hidden`, so a black window flashed every 5 minutes until the
+> owner switched it off — after which the gateway stayed down 11 hours and two
+> scheduled runs vanished silently. Use `pythonw.exe` or a `.vbs`.
+
+> **`hermes gateway status` is the liveness check, not a process scan.** A WMI
+> command-line scan cannot see a gateway that is still booting: two guard runs
+> 34s apart both concluded "nothing running" and launched a second instance.
+> `tasklist | grep hermes` is worse still — the gateway often runs as
+> `python.exe`, so its image name contains no "hermes" at all.
 
 ---
 
@@ -162,12 +247,20 @@ and is the highest-value outstanding work on this system.
 ### Routine health check
 
 ```bash
-python app.py doctor      # read-only, safe, exits 1 if a platform is unhealthy
-python app.py status      # queue counts per state
-hermes cron list          # both jobs, last status, next run
+python app.py doctor              # read-only; also flags search-keyword drift
+python app.py status              # queue counts per state
+python app.py auto-approve --dry-run   # what would submit unreviewed, changes nothing
+hermes cron list                  # both jobs, last status, next run
+hermes gateway status             # is the scheduler even alive?
 ```
 
-`python` means `.venv/Scripts/python.exe` on Windows.
+`python` means `.venv/Scripts/python.exe` on Windows. Later additions to the CLI
+include `auto-approve`, `retire-stale`, `job-board`, and
+`discover linkedin --today-hiring`; `app.py --help` is authoritative.
+
+**`auto-approve --dry-run` before any threshold change.** It prints exactly which
+jobs would be submitted without review, and is the only cheap way to see the
+blast radius of a `min_score` edit.
 
 ### Diagnosing a failed run
 
@@ -203,6 +296,32 @@ capture, and only conclude selector rot if a cold run still fails *and* the HTML
 shows genuinely changed markup. Do not hammer Naukri — ~10 apply runs in a few
 minutes produced rate-limited behaviour.
 
+### Per-platform capture quirks
+
+The same fact lives in a different place on each board — always verify against a
+real **search-results** capture before assuming:
+
+| | posting age | easy-apply |
+|---|---|---|
+| Naukri | in the card, `.job-post-day` | assumed true, refined at apply time |
+| Indeed | **not rendered** — only in the jobcards JSON (`formattedRelativeTime`) | JSON `indeedApplyEnabled` |
+| LinkedIn | **genuinely absent** from cards; most results are "Promoted" | "Easy Apply" badge text |
+
+LinkedIn age stays `-1` and scores neutral **by design** — it exists only on the
+job's own page, and fetching that per listing is the traffic most likely to get
+the account banned.
+
+Indeed's JSON orders fields alphabetically, so `jobkey` comes *after* both
+values in each object: attribute a value to the first key that **follows** it.
+Pairing by nearest key looks right and silently attributes flags to the next
+job.
+
+> Two false "this job is external" conclusions came from stale selectors, not
+> from the jobs. `easy_apply` was hardcoded `True` for every LinkedIn result,
+> and Indeed's `[data-testid='indeedApply']` / `.ialbl` match nothing on its
+> React page. Before concluding a platform can't be applied to, check that the
+> selector still matches something.
+
 ### Expired listings
 
 Discovered listings go stale within weeks. A run where most applies fail with
@@ -227,11 +346,27 @@ hermes cron run <job-id>      # goes through the gateway, so delivery runs too
 
 Calling `cron.scheduler._run_job_script` directly tests only the script.
 
-### Testing repair logic
+### Testing
+
+`tests/test_matching.py` runs without pytest (it isn't installed): import the
+module and call each `test_*`. The tests assert **ordering**, not exact scores,
+so weights can be retuned without rewriting them.
 
 The watchdog edits `jobs.json` and, once, `config.yaml`. Test that against a
 **sandboxed copy** — point the module's `JOBS_JSON` / `CONFIG` at a temp dir.
 Never test repair logic against production state.
+
+> **A saved debug capture cannot validate apply-side selectors.**
+> `page.content()` stores only the main frame and the file does not re-render:
+> loading one via `set_content` reported 0 matches and no button text, which
+> looked exactly like a failed fix. Verify with a live read-only probe instead —
+> open the job page, dismiss consent, count matches in the main frame *and*
+> every iframe, and never click apply. Discovery-side selectors are different:
+> those *can* be checked against a saved search-results page.
+
+> Copying `data/queue.db` alone can miss recent committed rows — WAL mode keeps
+> them in `queue.db-wal` until checkpoint. Copy all three files, or checkpoint
+> first, or the "backup" quietly lacks the newest data.
 
 ---
 
@@ -299,9 +434,16 @@ prevents duplicates.
 
 Beyond the hard rules in [AGENTS.md](AGENTS.md):
 
-- **Never approve or reject queue items** — not in the dashboard, not in
-  SQLite. Approval is the human's. The dashboard's decision routes are
-  POST-only precisely so nothing can trigger them by accident.
+- **Never approve or reject queue items yourself** — not in the dashboard, not
+  in SQLite. The *tool* auto-approves strong matches because the owner asked it
+  to (§1); that is a configured behaviour with rails, not a licence for you to
+  promote rows by hand. The dashboard's decision routes are POST-only precisely
+  so nothing can trigger them by accident.
+- **Do not widen the auto-apply blast radius casually.** `min_score`,
+  `daily_max` and `require_easy_apply` are the only things standing between a
+  scraper and unreviewed applications to real employers. Changing them is the
+  owner's call, and a scoring change silently re-scales every threshold — after
+  the 0–100 rewrite the old `min_score: 6` would have meant "submit everything".
 - **Never edit `profile.yaml` or `config.yaml`** unasked. When an apply fails on
   an unanswered question, surface the question; the user adds the answer.
   Keep `profile.yaml` answer-map keys **specific** — a broad
