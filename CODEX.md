@@ -368,6 +368,17 @@ Never test repair logic against production state.
 > them in `queue.db-wal` until checkpoint. Copy all three files, or checkpoint
 > first, or the "backup" quietly lacks the newest data.
 
+`tests/test_linkedin_send_message.py` runs the same way (no pytest, `if
+__name__` runner) but *is* safe to check with `set_content` against static
+fixtures under `tests/fixtures/`, unlike the apply-page caution above: the
+profile Message button and chat dock are plain top-level DOM, not inside an
+iframe. The fixtures are hand-built to match a real live probe's findings
+(verified once, read-only, no click/send), not raw dumps of a real contact's
+page — so no PII sits in the repo. This is what caught the `:has-text`
+substring bug where an unscoped `button:has-text('Message')` matched
+LinkedIn's global "Compose message" control on a profile with no real
+Message button.
+
 ---
 
 ## 4. Credentials

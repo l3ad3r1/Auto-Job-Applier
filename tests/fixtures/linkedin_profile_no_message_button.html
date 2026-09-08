@@ -1,0 +1,32 @@
+<!--
+Trimmed, anonymized reproduction of a real profile page's structure (verified
+live 2026-09-08 against a 1st-degree connection with no Message button on
+their own profile). The person is not a "Message"-connected contact but the
+page still carries the global chat-dock "Compose message" control that every
+LinkedIn page has -- and that control's text contains the substring
+"message", which is what fooled the old unscoped `button:has-text('Message')`
+selector.
+-->
+<body>
+  <div class="global-nav">
+    <a href="/messaging/">Messaging</a>
+  </div>
+  <main>
+    <section class="pv-top-card">
+      <h1>Sample Person</h1>
+      <div class="pvs-profile-actions">
+        <button aria-label="More actions">More</button>
+        <button aria-label="Follow Sample Person">Follow</button>
+      </div>
+    </section>
+    <section class="people-also-viewed">
+      <a href="/in/someone-else-1/">Message Someone Else</a>
+      <a href="/in/someone-else-2/">Message Another Person</a>
+    </section>
+  </main>
+  <div id="msg-overlay-container">
+    <div class="msg-overlay-list-bubble">
+      <button class="msg-overlay-bubble-header__control">Compose message</button>
+    </div>
+  </div>
+</body>

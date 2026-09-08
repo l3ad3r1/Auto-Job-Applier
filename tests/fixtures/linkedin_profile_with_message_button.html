@@ -1,0 +1,30 @@
+<!--
+Synthetic reproduction of a profile page for a real 1st-degree connection,
+matching LinkedIn's documented pattern: the profile's own Message button
+lives inside the intro section and carries an aria-label naming the person.
+-->
+<body>
+  <div class="global-nav">
+    <a href="/messaging/">Messaging</a>
+  </div>
+  <main>
+    <section class="pv-top-card">
+      <h1>Jane Doe</h1>
+      <div class="pvs-profile-actions">
+        <button aria-label="Message Jane Doe">Message</button>
+        <button aria-label="More actions">More</button>
+      </div>
+    </section>
+    <section class="people-also-viewed">
+      <a href="/in/someone-else-1/">Message Someone Else</a>
+    </section>
+  </main>
+  <div id="msg-overlay-container">
+    <div class="msg-overlay-bubble-header">
+      <span class="msg-overlay-bubble-header__title">Jane Doe</span>
+    </div>
+    <div class="msg-overlay-list-bubble">
+      <button class="msg-overlay-bubble-header__control">Compose message</button>
+    </div>
+  </div>
+</body>

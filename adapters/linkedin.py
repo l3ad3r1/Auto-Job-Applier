@@ -186,12 +186,14 @@ class LinkedInAdapter(BaseAdapter):
 
     # -- referral messaging ---------------------------------------------------------
 
-    def send_message(self, page: Page, profile_url: str, text: str) -> tuple[bool, str]:
+    def send_message(self, page: Page, profile_url: str, text: str,
+                      name: str = "") -> tuple[bool, str]:
         """Send one LinkedIn message from the person's own profile page.
 
         Recipient correctness is guaranteed structurally: we navigate to the
-        profile, confirm the URL is still that profile, and click the profile's
-        own Message BUTTON.
+        profile, confirm the URL is still that profile, click the profile's
+        own Message BUTTON, and confirm the compose panel that opens is
+        addressed to that person before typing anything.
 
         Never match anchors. A profile page carries `a:has-text('Message')`
         links for the "People also viewed" sidebar -- probing one profile found
@@ -200,10 +202,21 @@ class LinkedInAdapter(BaseAdapter):
         completely different person. Likewise the send control is matched by
         class, because `button:has-text('Send')` matches two elements.
 
+        `button:has-text('Message')` is also not safe unscoped: Playwright's
+        `:has-text` is a case-insensitive substring match, and every LinkedIn
+        page carries a global "Compose message" button in the chat dock --
+        "Compose message" contains "message". On a profile with no real
+        Message button, that global control silently satisfied the selector
+        and opened a blank draft with no recipient (Send stayed disabled, for
+        a reason that took three live attempts to find). Scoping to the
+        profile's own intro section, and checking the button's aria-label
+        names the person, makes that failure mode impossible instead of rare.
+
         Returns (ok, note) and never raises: a failed send must not take down a
         run, and must never be retried blindly into a duplicate message.
         """
         slug = profile_url.rstrip("/").rsplit("/in/", 1)[-1].lower()
+        first_name = (name.split() or [""])[0].lower()
         try:
             page.goto(profile_url, wait_until="domcontentloaded")
             page.wait_for_timeout(5000)
@@ -211,11 +224,27 @@ class LinkedInAdapter(BaseAdapter):
             if slug and slug not in page.url.lower():
                 return False, f"redirected away from the profile ({page.url[:60]})"
 
-            btn = page.locator("button:has-text('Message')").first
+            card = page.locator("main section").first
+            btn = card.locator("button:has-text('Message')").first
             if not btn.count() or not btn.is_visible():
                 return False, "no Message button (not a 1st-degree connection?)"
+            label = (btn.get_attribute("aria-label") or "").lower()
+            if first_name and first_name not in label:
+                return False, f"Message button doesn't name {name!r} (aria-label={label!r})"
             btn.click()
             page.wait_for_timeout(3000)
+
+            header = page.locator(
+                ".msg-overlay-bubble-header__title, "
+                ".msg-overlay-conversation-bubble__link, "
+                ".msg-thread__link-to-profile").first
+            recipient = ""
+            try:
+                recipient = (header.inner_text(timeout=5000) or "").strip()
+            except Exception:
+                pass
+            if not recipient or (first_name and first_name not in recipient.lower()):
+                return False, f"compose opened without {name!r} as recipient (saw {recipient!r})"
 
             box = page.locator(
                 "div[contenteditable='true'][role='textbox'], "

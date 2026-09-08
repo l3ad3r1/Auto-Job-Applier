@@ -203,7 +203,7 @@ def cmd_referrals(dry_run: bool = False, discover_only: bool = False,
             sent = 0
             for row in queued[:budget]:
                 ok, note = adapter.send_message(page, row["profile_url"],
-                                                row["message"])
+                                                row["message"], name=row["name"])
                 R.mark(con, row["id"], "sent" if ok else "failed", note)
                 print(f"  {'sent' if ok else 'FAILED'}: {row['name']} "
                       f"({row['company']}) - {note}")
