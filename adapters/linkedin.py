@@ -16,7 +16,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PWTimeout
 from core.models import Job, QueuedItem
 from core.profile import load_profile
 from llm.answers import resolve_answer
-from .base import ApplyResult, BaseAdapter
+from .base import ApplyResult, BaseAdapter, parse_posted_age
 
 JOB_CARD_SELECTORS = [
     ".scaffold-layout__list [data-view-name='job-card'][data-job-id]",
@@ -24,6 +24,14 @@ JOB_CARD_SELECTORS = [
     "div[data-occludable-job-id]",
     ".job-card-container",
 ]
+
+_APPLICANTS_RE = re.compile(r"(\d+)\s+applicants?", re.I)
+
+
+def _parse_applicants(text: str) -> int:
+    m = _APPLICANTS_RE.search(text or "")
+    return int(m.group(1)) if m else -1
+
 
 NEXT_TEXTS = ("next", "review", "continue", "continue to next step")
 SUBMIT_TEXTS = ("submit application", "submit")
@@ -78,6 +86,7 @@ class LinkedInAdapter(BaseAdapter):
                     job = self._parse_card(card)
                     if not job:
                         continue
+                    job.source_tag = str(cfg.get("source_tag", ""))
                     if any(x in job.title.lower() for x in exclude):
                         continue
                     jobs[job.external_id] = job
@@ -145,12 +154,79 @@ class LinkedInAdapter(BaseAdapter):
                            ".job-card-container__metadata-item")
         if not title:
             return None
+
+        # Everything below comes from text already rendered in the card, so it
+        # costs no extra page loads and adds no platform traffic.
+        #
+        # Posting age is usually ABSENT here, unlike Naukri and Indeed. Verified
+        # against a real search-results capture: of ~13 cards, one carried a
+        # date and nine were "Promoted", which never do. The age is only on the
+        # job's own page, and fetching that per listing is exactly the traffic
+        # that risks the LinkedIn account. So age stays -1 for most LinkedIn
+        # rows and scores neutral by design -- see _freshness_points.
+        try:
+            card_text = (card.inner_text() or "")
+        except Exception:
+            card_text = ""
+
+        # easy_apply used to be hardcoded True for every LinkedIn result. That
+        # is why "Easy Apply button/modal not found" was the single largest
+        # failure reason: external-apply jobs sailed through the require_easy_apply
+        # gate and only failed once a browser had driven to the apply button.
+        easy = "easy apply" in card_text.lower()
+
         return Job(
             platform=self.platform, external_id=job_id, title=title,
             company=company, location=location,
             url=f"https://www.linkedin.com/jobs/view/{job_id}",
-            easy_apply=True,
+            easy_apply=easy,
+            posted_age_days=parse_posted_age(card_text),
+            applicants=_parse_applicants(card_text),
         )
+
+    # -- referral messaging ---------------------------------------------------------
+
+    def send_message(self, page: Page, profile_url: str, text: str) -> tuple[bool, str]:
+        """Send one LinkedIn message from the person's profile page.
+
+        Deliberately one message at a time, driven by the caller's daily cap.
+        Returns (ok, note) and never raises: a failed send must not take down a
+        run, and must never be retried blindly into a duplicate message.
+        """
+        try:
+            page.goto(profile_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            btn = page.locator(
+                "button:has-text('Message'), a:has-text('Message')").first
+            if not btn.count():
+                return False, "no Message button (not a 1st-degree connection?)"
+            btn.click()
+            page.wait_for_timeout(2500)
+
+            box = page.locator(
+                "div[contenteditable='true'][role='textbox'], "
+                "div.msg-form__contenteditable[contenteditable='true']").first
+            try:
+                box.wait_for(state="visible", timeout=10000)
+            except PWTimeout:
+                return False, "message box did not open"
+
+            box.click()
+            page.keyboard.insert_text(text)
+            page.wait_for_timeout(1200)
+
+            send = page.locator(
+                "button.msg-form__send-button, button:has-text('Send')").first
+            if not send.count():
+                return False, "send button not found"
+            if send.is_disabled():
+                return False, "send button disabled (empty message?)"
+            send.click()
+            page.wait_for_timeout(3000)
+            return True, "sent"
+        except Exception as e:  # noqa: BLE001
+            return False, f"{type(e).__name__}: {str(e)[:120]}"
 
     # -- application modal ---------------------------------------------------------
 
