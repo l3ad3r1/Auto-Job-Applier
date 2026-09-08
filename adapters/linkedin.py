@@ -187,43 +187,80 @@ class LinkedInAdapter(BaseAdapter):
     # -- referral messaging ---------------------------------------------------------
 
     def send_message(self, page: Page, profile_url: str, text: str) -> tuple[bool, str]:
-        """Send one LinkedIn message from the person's profile page.
+        """Send one LinkedIn message from the person's own profile page.
 
-        Deliberately one message at a time, driven by the caller's daily cap.
+        Recipient correctness is guaranteed structurally: we navigate to the
+        profile, confirm the URL is still that profile, and click the profile's
+        own Message BUTTON.
+
+        Never match anchors. A profile page carries `a:has-text('Message')`
+        links for the "People also viewed" sidebar -- probing one profile found
+        three, labelled "Message Sonia S", "Message Shreya Roy", "Message Shiv
+        Purohit". Clicking one of those sends the referral request to a
+        completely different person. Likewise the send control is matched by
+        class, because `button:has-text('Send')` matches two elements.
+
         Returns (ok, note) and never raises: a failed send must not take down a
         run, and must never be retried blindly into a duplicate message.
         """
+        slug = profile_url.rstrip("/").rsplit("/in/", 1)[-1].lower()
         try:
             page.goto(profile_url, wait_until="domcontentloaded")
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(5000)
 
-            btn = page.locator(
-                "button:has-text('Message'), a:has-text('Message')").first
-            if not btn.count():
+            if slug and slug not in page.url.lower():
+                return False, f"redirected away from the profile ({page.url[:60]})"
+
+            btn = page.locator("button:has-text('Message')").first
+            if not btn.count() or not btn.is_visible():
                 return False, "no Message button (not a 1st-degree connection?)"
             btn.click()
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(3000)
 
             box = page.locator(
                 "div[contenteditable='true'][role='textbox'], "
                 "div.msg-form__contenteditable[contenteditable='true']").first
             try:
-                box.wait_for(state="visible", timeout=10000)
+                box.wait_for(state="visible", timeout=12000)
             except PWTimeout:
                 return False, "message box did not open"
 
-            box.click()
-            page.keyboard.insert_text(text)
-            page.wait_for_timeout(1200)
+            # focus(), not click(): the overlay animates in and the box is
+            # visible-but-not-clickable for long enough to blow a 30s timeout.
+            # A contenteditable only needs focus to receive typed text.
+            try:
+                box.focus()
+            except Exception:
+                box.click(force=True)
+            # press_sequentially, not insert_text. insert_text uses the CDP
+            # Input.insertText path, which puts the characters in the box but
+            # does not fire the input events LinkedIn's React form listens for
+            # -- the text was visibly there and Send stayed disabled.
+            try:
+                box.press_sequentially(text, delay=8)
+            except Exception:
+                page.keyboard.type(text, delay=8)
+            page.wait_for_timeout(2000)
 
-            send = page.locator(
-                "button.msg-form__send-button, button:has-text('Send')").first
+            # Never press Send on a message we cannot see in the box. An empty
+            # or half-typed referral request is worse than none: it cannot be
+            # unsent, and it spends the connection.
+            typed = ""
+            try:
+                typed = box.inner_text() or ""
+            except Exception:
+                pass
+            probe = text.splitlines()[0][:18] if text.strip() else ''
+            if probe and probe not in typed:
+                return False, f"text did not land in the box (saw {typed[:40]!r})"
+
+            send = page.locator("button.msg-form__send-button").first
             if not send.count():
                 return False, "send button not found"
             if send.is_disabled():
-                return False, "send button disabled (empty message?)"
+                return False, "send button disabled (text did not register?)"
             send.click()
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(3500)
             return True, "sent"
         except Exception as e:  # noqa: BLE001
             return False, f"{type(e).__name__}: {str(e)[:120]}"

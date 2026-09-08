@@ -2,6 +2,7 @@
 
   python app.py login <platform>     one-time manual sign-in (saved to profiles/)
   python app.py discover <platform>  scrape matching jobs into the queue
+  python app.py discover linkedin --today-hiring  today's "Hiring" listings
   python app.py prepare              draft answers for discovered jobs
   python app.py review               open the approval dashboard
   python app.py apply <platform>     submit APPROVED applications (paced, capped)
@@ -10,6 +11,8 @@
   python app.py routine              deterministic one-shot daily run (for cron)
   python app.py export               write applied jobs to data/applied_jobs.csv
   python app.py sync-sheet           append new applied jobs to the Google Sheet
+  python app.py job-board            rebuild the detailed Excel job board
+  python app.py retire-stale         retire pending listings older than 14 days
 """
 from __future__ import annotations
 
@@ -31,8 +34,13 @@ def cmd_login(platform: str) -> None:
     get_adapter(platform).interactive_login()
 
 
-def cmd_discover(platform: str) -> None:
+def cmd_discover(platform: str, today_hiring: bool = False) -> None:
     config = load_config()
+    if today_hiring:
+        if platform != "linkedin":
+            sys.exit("--today-hiring is only supported for LinkedIn")
+        from core.discovery import linkedin_today_hiring_config
+        config = linkedin_today_hiring_config(config)
     adapter = get_adapter(platform)
     queue = Queue()
     _, page = adapter.open_browser(headless=False)
@@ -43,7 +51,169 @@ def cmd_discover(platform: str) -> None:
     finally:
         adapter.close_browser()
     new = sum(1 for j in jobs if queue.add_job(j) is not None)
-    print(f"Discovered {len(jobs)} jobs, {new} new → queue ({queue.db_path})")
+    label = "LinkedIn today/Hiring" if today_hiring else platform
+    print(f"{label}: discovered {len(jobs)} jobs, {new} new -> queue ({queue.db_path})")
+
+
+AUTO_NOTE = "auto-approved (unreviewed)"
+
+
+def cmd_auto_approve(dry_run: bool = False) -> None:
+    """Promote strong pending matches straight to APPROVED, skipping review.
+
+    This is the one path that submits applications no human has read, so every
+    rail is enforced here rather than trusted to the caller:
+
+      * score >= the threshold for that job's platform: auto_apply.min_score,
+        overridden per platform by auto_apply.min_score_by_platform. Per
+        platform because ban risk is not uniform -- LinkedIn is the account
+        worth protecting, so its bar stays high while a safer board can run
+        lower without dragging LinkedIn volume up with it.
+      * no unanswered screening questions -- never guess on a real application
+      * easy_apply only when require_easy_apply (external ATS just fails)
+      * auto_apply.daily_max unreviewed promotions per day, counted from the
+        notes marker, on top of the normal per-platform caps in safety.py
+
+    Disabled by default. Marks every row it touches so the dashboard and the
+    DB both show what went out unreviewed.
+    """
+    import json as _json
+
+    from core.matching import score_job
+
+    cfg = (load_config().get("auto_apply") or {})
+    if not cfg.get("enabled"):
+        print("auto-apply disabled (config.yaml auto_apply.enabled)")
+        return
+
+    min_score = int(cfg.get("min_score", 8))
+    by_platform = {str(k).lower(): int(v)
+                   for k, v in (cfg.get("min_score_by_platform") or {}).items()}
+    daily_max = int(cfg.get("daily_max", 10))
+    need_easy = bool(cfg.get("require_easy_apply", True))
+
+    def threshold_for(platform: str) -> int:
+        return by_platform.get(platform.lower(), min_score)
+
+    queue = Queue()
+    spec = load_profile().get("job_spec", {})
+    used = queue.auto_approved_today(AUTO_NOTE)
+    budget = max(0, daily_max - used)
+
+    promoted, held = [], []
+    for item in queue.items(State.PENDING_REVIEW):
+        job, app = item.job, item.application
+        score = score_job(job, spec).score
+        try:
+            unanswered = _json.loads(app.unanswered or "[]")
+        except Exception:
+            unanswered = [app.unanswered] if app.unanswered else []
+
+        if score < threshold_for(job.platform):
+            continue
+        if unanswered:
+            held.append((job.title, f"{len(unanswered)} unanswered question(s)"))
+            continue
+        if need_easy and not job.easy_apply:
+            held.append((job.title, "not easy-apply"))
+            continue
+        if len(promoted) >= budget:
+            held.append((job.title, f"daily_max {daily_max} reached"))
+            continue
+        promoted.append((item.app_id, job.platform, job.title, job.company, score))
+
+    label = "WOULD auto-approve" if dry_run else "auto-approved"
+    bars = ", ".join(f"{p}>={s}" for p, s in sorted(by_platform.items()))
+    bar_text = f"score >= {min_score}" + (f" ({bars})" if bars else "")
+    print(f"{label} {len(promoted)} ({bar_text}, "
+          f"{used}/{daily_max} of today's unreviewed budget already used)")
+    for _, platform, title, company, score in promoted:
+        print(f"  score {score}  [{platform}] {title} - {company}")
+    for title, why in held[:5]:
+        print(f"  held: {title[:44]} ({why})")
+
+    if dry_run or not promoted:
+        return
+    for app_id, _, _, _, score in promoted:
+        queue.set_state(app_id, State.APPROVED, f"{AUTO_NOTE} score {score}")
+        # The note is for humans and gets overwritten by later set_state calls
+        # (failure reasons, retries). This column is the durable record and is
+        # what the daily_max budget counts.
+        queue.mark_auto_approved(app_id, score)
+    print(f"{len(promoted)} promoted to approved — these will submit "
+          "on the next apply step with no human review")
+
+
+def cmd_referrals(dry_run: bool = False, discover_only: bool = False,
+                  send_only: bool = False) -> None:
+    """Find 1st-degree connections at target companies and ask for a referral.
+
+    Discovery is read-only. Sending is gated on networking.enabled, capped by
+    networking.daily_max, and never messages the same person twice.
+    """
+    from core import referrals as R
+
+    cfg = (load_config().get("networking") or {})
+    queue = Queue()
+    profile = load_profile()
+    adapter = get_adapter("linkedin")
+
+    con = R.connect(queue.db_path)
+    already = R.sent_today(con)
+    cap = int(cfg.get("daily_max", 5))
+    con.close()
+
+    _, page = adapter.open_browser(headless=False)
+    try:
+        if not adapter.is_logged_in(page):
+            sys.exit("Not logged in to linkedin. Run: python app.py login linkedin")
+        if send_only:
+            # Skip the ~2 page loads per company that discovery costs. Sending
+            # to an already-drafted list needs none of it, and this is the
+            # account the user asked to protect.
+            print("send-only: skipping discovery")
+        else:
+            stats = R.discover(page, queue.db_path, profile,
+                               companies=int(cfg.get("companies_per_run", 10)))
+            print(f"searched {stats['companies']} companies, "
+                  f"{stats['skipped_unresolved']} unresolved (skipped), "
+                  f"{stats['found']} new contacts, "
+                  f"{stats['already_known']} already known")
+
+        con = R.connect(queue.db_path)
+        try:
+            queued = R.pending(con, cap)
+            if dry_run or discover_only or not cfg.get("enabled"):
+                why = ("dry run" if dry_run else
+                       "discover only" if discover_only else
+                       "networking.enabled is false")
+                print()
+                print(f"NOT SENDING ({why}). {len(queued)} drafted and waiting:")
+                for row in queued:
+                    print(f"  - {row['name']} ({row['company']}) {row['profile_url']}")
+                if queued:
+                    print()
+                    print("--- example draft ---")
+                    print(queued[0]["message"])
+                return
+
+            budget = max(0, cap - already)
+            print()
+            print(f"sending up to {budget} ({already}/{cap} already sent today)")
+            sent = 0
+            for row in queued[:budget]:
+                ok, note = adapter.send_message(page, row["profile_url"],
+                                                row["message"])
+                R.mark(con, row["id"], "sent" if ok else "failed", note)
+                print(f"  {'sent' if ok else 'FAILED'}: {row['name']} "
+                      f"({row['company']}) - {note}")
+                sent += 1 if ok else 0
+                Limiter(load_config(), queue).application_delay()
+            print(f"{sent} referral request(s) sent")
+        finally:
+            con.close()
+    finally:
+        adapter.close_browser()
 
 
 def cmd_prepare() -> None:
@@ -175,6 +345,19 @@ def cmd_doctor() -> None:
         except LLMError as e:
             print(f"  llm: DEGRADED ({e}) — unmatched questions will be flagged")
 
+    # Config drift: a search keyword no target_title can match means we pay
+    # full browser cost discovering those jobs and then auto-skip every one.
+    from core.profile import load_profile, unmapped_search_keywords
+    unmapped = unmapped_search_keywords(config, load_profile())
+    if unmapped:
+        failures.append(
+            f"search keywords with no matching target_title: {unmapped} — "
+            "every result for them is discovered then auto-skipped; add a "
+            "target_titles entry in profile.yaml")
+        print(f"  config: DRIFT ({len(unmapped)} unmatched keyword(s))")
+    else:
+        print("  config: OK (every search keyword maps to a target title)")
+
     for platform in ADAPTERS:
         adapter = get_adapter(platform)
         try:
@@ -249,6 +432,22 @@ def cmd_export() -> None:
     print(f"Exported {len(rows)} applied jobs -> {out}")
 
 
+STALE_PENDING_DAYS = 14
+
+
+def cmd_retire_stale(days: int = STALE_PENDING_DAYS) -> None:
+    """Retire old pending-review listings; never touch approved items."""
+    retired = Queue().retire_stale_pending(days)
+    print(f"Retired {retired} pending listing(s) older than {days} days as expired.")
+
+
+def cmd_job_board() -> None:
+    """Rebuild the local Excel kanban board from the complete queue."""
+    from core.job_board import BOARD_PATH, build_job_board
+    manifest = build_job_board()
+    print(f"Excel job board updated: {manifest['total_jobs']} jobs -> {BOARD_PATH}")
+
+
 ALL_PLATFORMS = ("linkedin", "naukri", "indeed")
 
 
@@ -281,6 +480,13 @@ def cmd_routine() -> None:
     # non-ASCII risks mojibake somewhere in that chain.
     report: list[str] = ["Job Applier - daily run"]
 
+    # Keep the human review queue useful without ever making approval choices.
+    retired = queue.retire_stale_pending(STALE_PENDING_DAYS)
+    if retired:
+        report.append(
+            f"Retired {retired} pending listing(s) older than "
+            f"{STALE_PENDING_DAYS} days as expired.")
+
     # 1. Health canary — skip unhealthy platforms rather than abort the run.
     _, doc_out = _run_step(["doctor"], timeout=900)
     healthy = [p for p in ALL_PLATFORMS if f"{p}: OK" in doc_out]
@@ -293,15 +499,39 @@ def cmd_routine() -> None:
         report.append("[!] local LLM unreachable - unmatched questions flagged")
     if not healthy:
         report.append("[X] No healthy platforms this run. Check sessions/selectors.")
+        try:
+            from core.job_board import build_job_board
+            board = build_job_board(queue)
+            report.append(f"Excel board updated: {board['total_jobs']} jobs")
+        except Exception as e:  # report the maintenance failure, never hide it
+            report.append(f"[!] Excel board update failed: {type(e).__name__}: {e}")
         print("\n".join(report))
         return
 
     # 2. Discover on each healthy platform (sequential; own browser each).
     for platform in healthy:
-        _run_step(["discover", platform], timeout=1200)
+        args = ["discover", platform]
+        if platform == "linkedin":
+            args.append("--today-hiring")
+        code, out = _run_step(args, timeout=1200)
+        if platform == "linkedin":
+            summary = next((line.strip() for line in out.splitlines()
+                            if line.strip().startswith("LinkedIn today/Hiring:")), "")
+            if summary:
+                report.append(summary)
+            elif code:
+                report.append("[!] LinkedIn today/Hiring search failed")
 
     # 3. Score + draft answers.
     _run_step(["prepare"], timeout=600)
+
+    # 3b. Promote strong matches straight past review, when auto_apply is on.
+    # Listings expire within weeks, so waiting for the next run to submit an
+    # already-good match costs real applications. No-op while disabled.
+    _, auto_out = _run_step(["auto-approve"], timeout=300)
+    for line in auto_out.splitlines():
+        if line.startswith("auto-approved ") and " 0 (" not in line:
+            report.append(f"[auto] {line.strip()}")
 
     # 4. Submit anything the user already approved (caps enforced inside apply).
     applied_lines: list[str] = []
@@ -321,9 +551,18 @@ def cmd_routine() -> None:
     if "disabled" not in sheet_status and "no webhook" not in sheet_status:
         report.append(sheet_status)
 
-    # 6. Compose report from the queue's own truth.
+    # 6. Rebuild the complete local Excel board after discovery and apply.
+    try:
+        from core.job_board import build_job_board
+        board = build_job_board(queue)
+        report.append(f"Excel board updated: {board['total_jobs']} jobs")
+    except Exception as e:  # the Telegram report must make this visible
+        report.append(f"[!] Excel board update failed: {type(e).__name__}: {e}")
+
+    # 7. Compose report from the queue's own truth.
     counts = queue.counts()
     pending = counts.get(State.PENDING_REVIEW.value, 0)
+    approved_total = counts.get(State.APPROVED.value, 0)
     applied_total = counts.get(State.APPLIED.value, 0)
     report.append(f"Platforms run: {', '.join(healthy)}")
     if applied_lines:
@@ -331,7 +570,15 @@ def cmd_routine() -> None:
         report.extend(applied_lines)
     else:
         report.append("No approved items to submit (approve some in the dashboard).")
-    report.append(f"{pending} pending your review | {applied_total} applied all-time")
+    report.append(
+        f"{pending} pending review | {approved_total} approved | "
+        f"{applied_total} applied all-time")
+    # What came back. Without this the report only ever says how much we sent,
+    # never whether any of it worked.
+    outcomes = queue.outcome_counts()
+    if outcomes:
+        report.append("Outcomes: " + ", ".join(
+            f"{n} {name}" for name, n in outcomes.items()))
     if pending:
         report.append("Review: python app.py review -> http://127.0.0.1:8377")
     # Final safety net: guarantee ASCII regardless of captured subprocess text.
@@ -347,22 +594,44 @@ def main() -> None:
     for name in ("login", "discover", "apply"):
         sp = sub.add_parser(name)
         sp.add_argument("platform")
+        if name == "discover":
+            sp.add_argument("--today-hiring", action="store_true",
+                            help="LinkedIn only: keyword Hiring, posted in last 24h")
         if name == "apply":
             sp.add_argument("--limit", type=int, default=None,
                             help="apply to at most N approved jobs this run")
     sub.add_parser("prepare")
+    ref = sub.add_parser("referrals")
+    ref.add_argument("--dry-run", action="store_true",
+                     help="find and draft, send nothing")
+    ref.add_argument("--discover-only", action="store_true",
+                     help="alias for --dry-run")
+    ref.add_argument("--send-only", action="store_true",
+                     help="send already-drafted requests, skip discovery")
+    auto = sub.add_parser("auto-approve")
+    auto.add_argument("--dry-run", action="store_true",
+                      help="show what would be submitted unreviewed, change nothing")
     sub.add_parser("review")
     sub.add_parser("status")
     sub.add_parser("doctor")
     sub.add_parser("routine")
     sub.add_parser("export")
     sub.add_parser("sync-sheet")
+    stale = sub.add_parser("retire-stale")
+    stale.add_argument("--days", type=int, default=STALE_PENDING_DAYS)
+    sub.add_parser("job-board")
     args = p.parse_args()
 
     if args.cmd == "login":
         cmd_login(args.platform)
     elif args.cmd == "discover":
-        cmd_discover(args.platform)
+        cmd_discover(args.platform, today_hiring=args.today_hiring)
+    elif args.cmd == "referrals":
+        cmd_referrals(dry_run=args.dry_run,
+                      discover_only=args.discover_only,
+                      send_only=args.send_only)
+    elif args.cmd == "auto-approve":
+        cmd_auto_approve(dry_run=args.dry_run)
     elif args.cmd == "prepare":
         cmd_prepare()
     elif args.cmd == "review":
@@ -379,6 +648,10 @@ def main() -> None:
         cmd_export()
     elif args.cmd == "sync-sheet":
         cmd_sync_sheet()
+    elif args.cmd == "retire-stale":
+        cmd_retire_stale(args.days)
+    elif args.cmd == "job-board":
+        cmd_job_board()
 
 
 if __name__ == "__main__":
