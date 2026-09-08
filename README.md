@@ -26,6 +26,10 @@ discover → score/prepare → YOU approve in the dashboard → apply (paced, ca
   no credential handling (you log in manually once per platform)
 - **Agent-ready** — drive it from Claude Code, Codex, Cursor, or Hermes
   (see [Using with an agent](#using-with-an-agent))
+- **Referral outreach** (LinkedIn, opt-in) — finds **1st-degree connections**
+  at companies you've applied to and drafts a short referral ask; sending is
+  off by default (`networking.enabled: false`), capped per day, and never
+  messages the same person twice. See [core/referrals.py](core/referrals.py).
 
 ## Setup
 
@@ -61,6 +65,7 @@ python app.py apply linkedin      # submit ONLY what you approved
 python app.py status              # queue counts
 python app.py export              # applied jobs -> data/applied_jobs.csv
 python app.py sync-sheet          # append applied jobs to your Google Sheet
+python app.py referrals --dry-run # find connections + draft referral asks (never sends)
 ```
 
 ### Google Sheet auto-append (optional)
@@ -124,7 +129,7 @@ gotchas (profile-local skills dir, model pinning, bash paths).
 
 ## Layout
 
-- `core/` — models, SQLite queue, profile loader, job-spec matcher
+- `core/` — models, SQLite queue, profile loader, job-spec matcher, referral outreach
 - `adapters/` — one module per platform (LinkedIn, Naukri, Indeed)
 - `llm/` — grounded local-LLM answer fallback (OpenAI-compatible, stdlib-only)
 - `dashboard/` — FastAPI review UI

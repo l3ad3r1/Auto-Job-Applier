@@ -17,7 +17,7 @@ This repo is **public**. Machine-specific and personal values live in
 `RUNBOOK.md` and `config.yaml`, both gitignored. Keep it that way — never move
 a secret, chat ID, or absolute user path into a committed file.
 
-Last updated: 2026-09-07.
+Last updated: 2026-09-09.
 
 ---
 
@@ -75,6 +75,7 @@ One SQLite file, `data/queue.db` (gitignored):
 | `applications` | one row per job, with state | FK to `jobs`, `UNIQUE(job_id)` |
 | `submissions_log` | one row per successful submit | drives the daily caps |
 | `answer_log` | every LLM-drafted answer | audit trail, shown in dashboard |
+| `referrals` | one row per LinkedIn contact found | `UNIQUE(profile_url)` — see §1a |
 
 States: `pending_review → approved → applied`, plus `skipped`, `rejected`,
 `failed`.
@@ -116,13 +117,47 @@ capture before touching the weights.
 ```
 app.py              CLI entry point — all commands live here
 safety.py           Limiter: daily caps + randomized human pacing
-core/               queue.py, profile.py (config/profile loading), matching.py, sheets.py
+core/               queue.py, profile.py (config/profile loading), matching.py, sheets.py,
+                     referrals.py (1st-degree connection outreach)
 adapters/           linkedin.py, naukri.py, indeed.py — one per platform
 llm/                client.py (OpenAI-compatible), answers.py (answer resolution order)
 dashboard/          FastAPI review UI; decision routes are POST-only by design
 hermes/             deployable Hermes assets — see §2
 data/debug/         screenshots + HTML captured on every failed apply and doctor
 ```
+
+### 1a. Networking (referral outreach) — NOT part of the automatic routine
+
+`python app.py referrals` is a **separate command**, deliberately not called
+from `cmd_routine`. It finds 1st-degree LinkedIn connections at companies
+you've applied to and drafts a referral ask:
+
+```
+resolve company → currentCompany search, network=["F"] (1st-degree only)
+                → draft_message() per contact
+                → send, gated on networking.enabled + daily_max, never twice
+```
+
+Scope is narrow on purpose — **1st-degree only**, resolved via LinkedIn's own
+"see employees" link scored against the company name asked for (Jaccard, not
+coverage — "Bajaj Finance" must not match "Bajaj Housing Finance"). No cold
+outreach to strangers; that is what gets accounts restricted.
+
+**Status as of 2026-09-09: discovery and drafting work; sending was broken
+and is now fixed but not yet re-verified live.** The failure: an unscoped
+`button:has-text('Message')` on the profile page — Playwright's `:has-text`
+is a case-insensitive substring match — matched LinkedIn's global "Compose
+message" chat-dock control on a profile with no real Message button, opening
+a blank draft with no recipient. `adapters/linkedin.py: send_message` now
+scopes the button to the profile's own section, checks its `aria-label`
+names the contact, and checks the compose panel's header before typing
+anything. See `tests/test_linkedin_send_message.py` for the regression
+fixtures, and §3 Testing below for why those fixtures are safe to check
+offline here even though apply-page fixtures are not.
+
+Before re-testing live: this ran into three send failures in one short burst
+against one profile (a real anti-automation pattern) before the root cause
+was found. Test one contact at a time, not a batch, if you re-verify.
 
 ---
 
@@ -463,6 +498,12 @@ Beyond the hard rules in [AGENTS.md](AGENTS.md):
 - **Never bypass caps, CAPTCHAs, or login walls.** Caps are hard stops in
   `safety.py`. LinkedIn and Indeed ToS prohibit automation and the ban risk is
   real — the caps, the pacing, and the human gate all exist for that reason.
+- **Never batch-test `referrals` sending against live profiles.** Debugging
+  `send_message` live cost three failed send attempts plus three profile loads
+  on one contact in a few minutes — that burst pattern is itself what gets an
+  account restricted, on the account this whole feature exists to protect.
+  Fix and test offline against `tests/fixtures/` first (see §1a, §3); verify
+  live one contact at a time only when the offline tests already pass.
 - **Never auto-answer free-text recruiter questions.** Radio and choice
   questions are answered from the profile map; free text is flagged for the
   user. Inventing an answer on a real application is not recoverable.
