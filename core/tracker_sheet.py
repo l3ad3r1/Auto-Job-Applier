@@ -109,10 +109,35 @@ def _read_existing(ws) -> dict[str, dict]:
     return kept
 
 
+def _sync_outcomes(existing: dict[str, dict], db_path: Path) -> int:
+    """Push hand-typed Status values back into SQLite.
+
+    The sheet is where the user records what happened after applying, and until
+    that reaches the database nothing else can report on it — the pipeline
+    stopped at `applied`, so 101 applications carried no outcome at all. Status
+    "Applied" is the default we wrote, not a user judgement, so only the other
+    values are recorded.
+    """
+    from core.queue import Queue
+
+    queue = Queue(db_path)
+    changed = 0
+    for key, vals in existing.items():
+        status = str(vals.get("Status") or "").strip()
+        if not status or status.lower() == "applied":
+            continue
+        platform, _, external_id = key.partition(":")
+        if platform and external_id and queue.set_outcome(
+                platform, external_id, status.lower()):
+            changed += 1
+    return changed
+
+
 def refresh(workbook, db_path: Path) -> dict:
     """Rebuild the Tracker sheet in `workbook`, preserving hand-entered data."""
     existing = _read_existing(workbook[SHEET_NAME]
                               if SHEET_NAME in workbook.sheetnames else None)
+    outcomes_recorded = _sync_outcomes(existing, db_path)
     if SHEET_NAME in workbook.sheetnames:
         del workbook[SHEET_NAME]
     ws = workbook.create_sheet(SHEET_NAME, 0)          # first sheet
@@ -201,4 +226,5 @@ def refresh(workbook, db_path: Path) -> dict:
             ws.add_data_validation(dv)
             dv.add(f"{col}{FIRST_DATA_ROW}:{col}{HEADER_ROW + len(jobs)}")
 
-    return {"rows": len(jobs), "carried_over": carried}
+    return {"rows": len(jobs), "carried_over": carried,
+            "outcomes_recorded": outcomes_recorded}
