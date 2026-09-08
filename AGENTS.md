@@ -18,6 +18,7 @@ Run from the repo root with the venv Python (`python` below means
 ```bash
 python app.py status                 # queue counts per state
 python app.py discover <platform>    # linkedin | naukri | indeed
+python app.py discover linkedin --today-hiring # last-24h Hiring listings
 python app.py prepare                # score vs job spec + draft answers
 python app.py review                 # dashboard at http://127.0.0.1:8377
 python app.py apply <platform> [--limit N]   # submit APPROVED items only
@@ -39,7 +40,9 @@ time with generous timeouts, never in parallel.
 1. `doctor` — if a platform is reported unhealthy (expired session, rotted
    selectors), SKIP that platform for this run and put the doctor's message
    at the top of your report. Do not abort the whole run for one platform.
-2. `discover` each healthy platform, sequentially.
+2. `discover` each healthy platform, sequentially. LinkedIn scheduled runs use
+   `--today-hiring` to prioritize Easy Apply listings mentioning Hiring and
+   posted within the last 24 hours.
 3. `prepare`.
 4. `retire-stale` — retire pending-review listings older than 14 days as
    `expired`; never touch approved items.
@@ -54,8 +57,10 @@ time with generous timeouts, never in parallel.
 ## Hard rules
 
 - **Never approve or reject queue items.** Not via the dashboard API, not via
-  the SQLite DB. Approval is the human's job; the pipeline only submits rows
-  the user approved.
+  the SQLite DB. Note the pipeline itself *does* promote strong matches past
+  review when `auto_apply.enabled` is set — that is a configured behaviour with
+  rails, not licence for you to approve rows or widen the bars. Dry-run any
+  threshold change with `python app.py auto-approve --dry-run`.
 - **Never edit `profile.yaml` or `config.yaml`** on your own. When an apply
   fails with an unanswered question, surface the question and let the user
   add the answer.
