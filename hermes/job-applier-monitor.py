@@ -35,7 +35,7 @@ JOBS_JSON = HERMES_PROFILE / "cron" / "jobs.json"
 EXECUTIONS_DB = HERMES_PROFILE / "cron" / "executions.db"
 SCRIPTS_DIR = HERMES_PROFILE / "scripts"
 
-REPO = Path("E:/claude-projects/job-applier")
+REPO = Path("E:/claude-projects/infra/job-applier")
 QUEUE_DB = REPO / "data" / "queue.db"
 CONFIG = REPO / "config.yaml"
 

@@ -14,7 +14,7 @@ metadata:
 
 # Job Applier — auto job applications with a human review gate
 
-A local pipeline at `E:\claude-projects\job-applier` that discovers jobs on
+A local pipeline at `E:\claude-projects\infra\job-applier` that discovers jobs on
 LinkedIn, Naukri, and Indeed, scores them against the user's job spec
 (profile.yaml), drafts screening answers (profile map +
 local Ollama LLM), and — only after the user approves items in the dashboard —
@@ -26,7 +26,7 @@ Always use the project's venv Python, from the project directory. The
 terminal tool runs **bash** — use forward slashes, never backslashes:
 
 ```bash
-cd "E:/claude-projects/job-applier"
+cd "E:/claude-projects/infra/job-applier"
 ./.venv/Scripts/python.exe app.py status              # queue counts per state
 ./.venv/Scripts/python.exe app.py discover naukri     # scrape new jobs (also: linkedin, indeed)
 ./.venv/Scripts/python.exe app.py prepare             # score + draft answers -> pending_review

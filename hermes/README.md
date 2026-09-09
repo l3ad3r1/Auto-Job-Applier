@@ -52,7 +52,7 @@ Create the job, then flip it to no_agent script mode in the profile's
   "schedule": { "kind": "cron", "expr": "0 9,18 * * *" },
   "no_agent": true,
   "script": "job-applier-routine.py",
-  "workdir": "E:/claude-projects/job-applier",
+  "workdir": "E:/claude-projects/infra/job-applier",
   "provider": null, "model": null, "base_url": null,   // no agent LLM needed
   "delivery": "telegram"
 }

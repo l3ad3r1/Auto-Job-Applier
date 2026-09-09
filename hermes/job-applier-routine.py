@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path("E:/claude-projects/job-applier")
+REPO = Path("E:/claude-projects/infra/job-applier")
 VENV_PYTHON = REPO / ".venv" / "Scripts" / "python.exe"
 
 # Hermes kills the script at 3600s; bail a little earlier so the timeout is

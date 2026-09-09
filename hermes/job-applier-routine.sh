@@ -9,8 +9,8 @@
 #   cp hermes/job-applier-routine.sh \
 #      "$LOCALAPPDATA/hermes/profiles/<profile>/scripts/job-applier-routine.sh"
 set -o pipefail
-cd "E:/claude-projects/job-applier" || {
-  echo "❌ Job Applier: repo not found at E:/claude-projects/job-applier"
+cd "E:/claude-projects/infra/job-applier" || {
+  echo "❌ Job Applier: repo not found at E:/claude-projects/infra/job-applier"
   exit 0
 }
 ./.venv/Scripts/python.exe app.py routine 2>&1
