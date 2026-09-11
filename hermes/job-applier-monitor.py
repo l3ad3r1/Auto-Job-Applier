@@ -30,7 +30,11 @@ from pathlib import Path
 # Derived from the environment rather than hardcoded, so this file carries no
 # username into the public repo and still works if HERMES_HOME moves.
 _LOCALAPPDATA = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-HERMES_PROFILE = Path(_LOCALAPPDATA) / "hermes" / "profiles" / "project-manager"
+HERMES_ROOT = Path(_LOCALAPPDATA) / "hermes"
+_LEGACY_PROFILE = HERMES_ROOT / "profiles" / "project-manager"
+# Hermes 0.21+ stores the default profile directly under HERMES_ROOT. Older
+# installs used profiles/project-manager, so keep that layout as a fallback.
+HERMES_PROFILE = HERMES_ROOT if (HERMES_ROOT / "cron").exists() else _LEGACY_PROFILE
 JOBS_JSON = HERMES_PROFILE / "cron" / "jobs.json"
 EXECUTIONS_DB = HERMES_PROFILE / "cron" / "executions.db"
 SCRIPTS_DIR = HERMES_PROFILE / "scripts"
@@ -39,7 +43,8 @@ REPO = Path("E:/claude-projects/infra/job-applier")
 QUEUE_DB = REPO / "data" / "queue.db"
 CONFIG = REPO / "config.yaml"
 
-APPLIER_JOB_ID = "999b6a016167"
+APPLIER_JOB_ID = "999b6a016167"  # legacy fallback; name lookup survives recreation
+APPLIER_JOB_NAME = "Job applier twice-daily"
 WRAPPER = "job-applier-routine.py"
 OLLAMA_TAGS = "http://127.0.0.1:11434/api/tags"
 
@@ -85,9 +90,12 @@ def check_job_config() -> dict | None:
     data = _load_jobs()
     if data is None:
         return None
-    job = next((j for j in data.get("jobs", []) if j.get("id") == APPLIER_JOB_ID), None)
+    jobs = data.get("jobs", [])
+    job = next((j for j in jobs if j.get("name") == APPLIER_JOB_NAME), None)
     if job is None:
-        problems.append(f"applier job {APPLIER_JOB_ID} is GONE from jobs.json")
+        job = next((j for j in jobs if j.get("id") == APPLIER_JOB_ID), None)
+    if job is None:
+        problems.append(f"applier job {APPLIER_JOB_NAME!r} is GONE from jobs.json")
         return None
 
     dirty = False
@@ -163,7 +171,7 @@ def check_last_run(job: dict) -> None:
         notes.append(f"last_run_at unparseable: {raw!r}")
 
 
-def check_recent_executions() -> None:
+def check_recent_executions(applier_job_id: str) -> None:
     """Count consecutive failures, which is what nine silent days looked like."""
     if not EXECUTIONS_DB.exists():
         return
@@ -171,7 +179,7 @@ def check_recent_executions() -> None:
         con = sqlite3.connect(f"file:{EXECUTIONS_DB}?mode=ro", uri=True)
         rows = list(con.execute(
             "select status from executions where job_id=? order by started_at desc limit 20",
-            (APPLIER_JOB_ID,)))
+            (applier_job_id,)))
         con.close()
     except Exception as e:
         notes.append(f"could not read executions.db ({e})")
@@ -343,7 +351,7 @@ def main() -> int:
     job = check_job_config()
     if job:
         check_last_run(job)
-        check_recent_executions()
+        check_recent_executions(str(job.get("id") or APPLIER_JOB_ID))
     check_llm()
     approved_total = check_queue()
     maybe_restore_caps(approved_total)

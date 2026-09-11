@@ -24,12 +24,13 @@ applier"). Fine when you're present; not recommended for cron (see below).
 
 ## Setup — no_agent script mode
 
-Deploy the wrapper to the **active profile's** scripts dir (Hermes resolves
-cron scripts there, not root `HERMES_HOME/scripts`):
+Deploy both wrappers to the active profile's scripts directory. Hermes 0.21+
+stores the default profile directly under `HERMES_HOME`; named profiles use
+`HERMES_HOME/profiles/<profile>`:
 
 ```bash
-cp hermes/job-applier-routine.py \
-   "$LOCALAPPDATA/hermes/profiles/<profile>/scripts/job-applier-routine.py"
+cp hermes/job-applier-routine.py hermes/job-applier-monitor.py \
+   "$LOCALAPPDATA/hermes/scripts/"
 ```
 
 > **Use the `.py` wrapper, not the `.sh` one.** Hermes picks a cron
@@ -92,28 +93,27 @@ approves or submits, and never exits non-zero.
 
 ## Agent + skill mode
 
-Deploy [SKILL.md](SKILL.md) to the active profile's skills dir (Hermes reads
-skills per-profile; keep the root copy in sync too):
+Deploy [SKILL.md](SKILL.md) to the active profile's skills directory:
 
 ```bash
 cp hermes/SKILL.md "$LOCALAPPDATA/hermes/skills/productivity/job-applier/SKILL.md"
-cp hermes/SKILL.md "$LOCALAPPDATA/hermes/profiles/<profile>/skills/productivity/job-applier/SKILL.md"
 ```
 
 Then say "run the job applier" in a Hermes session.
 
 ## Operational notes (hard-won)
 
-- **Scripts live in the profile's dir**, `profiles/<profile>/scripts/` — not
-  root `HERMES_HOME/scripts/`. A script placed only in the root is "not found".
+- **Scripts live in the active profile's directory.** For the Hermes 0.21+
+  default profile this is `HERMES_HOME/scripts/`; named profiles use
+  `HERMES_HOME/profiles/<profile>/scripts/`.
 - **Telegram must be configured on the active profile** (`hermes gateway
   setup`), or delivery fails with "no delivery target resolved" and reports
-  only land in `profiles/<profile>/cron/output/<job-id>/*.md`. Test cheaply
+  only land in `cron/output/<job-id>/*.md`. Test cheaply
   with `hermes send -t telegram "test"`.
 - **Bash paths only.** Hermes runs `.sh` scripts and its terminal tool with
   bash even on Windows — use forward slashes.
 - Trigger a manual run with `hermes cron run <job-id>`; read the result in
-  `profiles/<profile>/cron/output/<job-id>/*.md`.
+  `cron/output/<job-id>/*.md`.
 - For **agent mode**: unpinned agent cron jobs are skipped when the global
   inference config drifts (spend guard), so pin `provider`/`model`. no_agent
   mode sidesteps this entirely.
