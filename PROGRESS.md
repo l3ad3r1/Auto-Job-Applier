@@ -1,13 +1,14 @@
 # Progress
 
-- Completed: Rewired the fresh Hermes 0.21 default profile to Job Applier, redeployed its scripts/skill, recreated the 09:00/18:00 and 21:00 jobs, and started the gateway.
+- Completed: Rewired the fresh Hermes 0.21 default profile to Job Applier, restored Telegram delivery, redeployed its scripts/skill, recreated the 09:00/18:00 and 21:00 jobs, and started the gateway.
 - In progress: None.
-- Next: Reconnect Telegram delivery and optionally install persistent gateway auto-start after user confirmation.
+- Next: Confirm the first scheduled 18:00 application report and 21:00 watchdog report arrive normally.
 
 ## Latest verification
 
 - Recreated Hermes jobs: `e6c2c53080d7` (09:00/18:00) and `43d822b140a3` (21:00), using `E:\claude-projects\infra\job-applier`.
-- Gateway is running manually; Telegram was not preserved by the Hermes reset, so reports currently stay local.
+- Telegram token and private destination verified with a successful test message; both jobs now deliver normal and failure reports there.
+- Gateway is running and its Windows Scheduled Task is registered.
 
 - Manual Hermes run `913355fbd3354a41bcd6dc1901cf57af` completed on 2026-09-09 at 20:22 IST.
 - Confirmed submissions: PayFX Global and EBG Group.
