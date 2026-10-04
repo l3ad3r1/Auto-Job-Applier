@@ -1,8 +1,8 @@
 # Progress
 
-- Completed: Rewired the fresh Hermes 0.21 default profile to Job Applier, restored Telegram delivery, and verified it with a live manual routine run.
-- In progress: None.
-- Next: Refresh the Indeed login and repair the local LLM endpoint/model before the next scheduled run.
+- Completed (2026-10-04): diagnosed the application drop and fixed two leaks. Naukri chatbot jobs were misfiled as "no confirmation" because detection resolved to an invisible wrapper (`CHATBOT_DRAWER` now targets the drawer). The title gate now accepts reordered titles ("Manager - Business Development"); 23 distinct historical titles recovered, no false positives.
+- Findings: Hermes ran nothing 2026-09-23 to 2026-09-30 (gateway silent; the watchdog shares the machine so could not report it). Indeed's session expires repeatedly. About half of attempts fail (Naukri chatbot, Indeed external apply, LinkedIn Easy Apply missing). Caps and `auto_apply.daily_max` are not binding.
+- Next: user re-logs into Indeed (`.venv\Scripts\python.exe app.py login indeed`); consider Foundit/Shine adapters; decide whether to requeue the 12 Naukri rows failed by the misdetection.
 
 ## Latest verification
 

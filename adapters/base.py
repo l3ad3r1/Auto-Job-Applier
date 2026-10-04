@@ -6,6 +6,7 @@ and every later run reuses that session. Credentials are never handled here.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -18,6 +19,38 @@ from playwright.sync_api import BrowserContext, Error as PWError, Page, sync_pla
 from core.models import Job, QueuedItem
 
 ROOT = Path(__file__).resolve().parent.parent
+
+_AGE_UNITS = {"minute": 0, "hour": 0, "day": 1, "week": 7, "month": 30, "year": 365}
+_AGE_RE = re.compile(r"(\d+)\+?\s*(minute|hour|day|week|month|year)s?\s+ago", re.I)
+
+
+def parse_posted_age(text: str) -> int:
+    """Days since posting, from wording like "2 weeks ago". -1 when absent.
+
+    Shared by all three adapters because each surfaces the same phrasing in a
+    different place: Naukri renders it in the card (.job-post-day), Indeed only
+    embeds it in the results JSON (formattedRelativeTime), and LinkedIn mostly
+    does not expose it on search cards at all.
+
+    The wordless forms are real values, not defensive padding: across the saved
+    Naukri captures, "Today" appears 17 times and "Few hours ago" 6, and an
+    earlier digits-only version returned -1 for both -- scoring the freshest
+    listings on the board as "age unknown".
+
+    Takes the SMALLEST age present: "Reposted 2 days ago" next to an older
+    original date should count as 2 days.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return -1
+    if "just now" in t or "few hours" in t or t == "today":
+        return 0
+    if t == "yesterday":
+        return 1
+    ages = [int(n) * _AGE_UNITS[unit] for n, unit in _AGE_RE.findall(t)]
+    return min(ages) if ages else -1
+
+
 DEBUG_DIR = ROOT / "data" / "debug"
 
 

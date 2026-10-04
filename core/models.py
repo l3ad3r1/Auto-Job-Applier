@@ -29,6 +29,7 @@ class State(str, Enum):
     APPLIED = "applied"
     FAILED = "failed"
     SKIPPED = "skipped"
+    EXPIRED = "expired"
 
 
 def utcnow() -> str:
@@ -46,7 +47,15 @@ class Job:
     description: str = ""
     salary: str = ""              # raw posted salary text, "" when undisclosed
     easy_apply: bool = False
+    # Card metadata, captured at discovery with no extra page loads. -1 means
+    # "not captured" and must score neutral, not badly: rows discovered before
+    # these existed, and platforms that do not show them, would otherwise be
+    # ranked below rows that merely happen to expose the field.
+    posted_age_days: int = -1     # from "2 weeks ago" on the search card
+    applicants: int = -1          # from "26 applicants" on the search card
     discovered_at: str = field(default_factory=utcnow)
+    source_tag: str = ""          # e.g. linkedin_today_hiring
+    source_tagged_at: str = ""    # when the listing matched that discovery source
 
 
 @dataclass

@@ -18,7 +18,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PWTimeout
 from core.models import Job, QueuedItem
 from core.profile import load_profile
 from llm.answers import resolve_answer
-from .base import ApplyResult, BaseAdapter
+from .base import ApplyResult, BaseAdapter, parse_posted_age
 
 
 def _slug(text: str) -> str:
@@ -29,6 +29,16 @@ def _clean_salary(text: str) -> str:
     t = " ".join(text.split())
     return "" if t.lower() in ("", "not disclosed") else t
 
+
+# The screening chatbot's drawer itself. Never a selector that can resolve to
+# its wrapper: `div[id*='ChatbotContainer']` / `div[class*='chatbotcontainer']`
+# match an outer `_chatBotContainer` div that sits ahead of the drawer in the
+# DOM and holds only a fixed-position child, so it has no layout size and
+# Playwright reports it NOT visible. With `.first` landing on it, a drawer that
+# was open and showing a question within 1s of the click was never detected,
+# and every chatbot job was misfiled as "clicked Apply, no confirmation"
+# (verified live 2026-10-04: wrapper visible=False, drawer visible=True).
+CHATBOT_DRAWER = "div[class*='chatbot_Drawer' i]"
 
 class NaukriAdapter(BaseAdapter):
     platform = "naukri"
@@ -117,6 +127,10 @@ class NaukriAdapter(BaseAdapter):
             salary=_clean_salary(text_of(".sal", ".sal-wrap span",
                                          "span[class*='sal']")),
             easy_apply=True,  # refined at apply time (external ones get skipped)
+            # Naukri is the one board that renders the posting age straight
+            # into the card.
+            posted_age_days=parse_posted_age(
+                text_of(".job-post-day", "span[class*='job-post-day']")),
         )
 
     # -- application ---------------------------------------------------------------
@@ -230,8 +244,7 @@ class NaukriAdapter(BaseAdapter):
             pass
 
     def _chatbot_open(self, page: Page) -> bool:
-        return page.locator("div[id*='ChatbotContainer' i], div[class*='chatbotcontainer' i], "
-                            "div[class*='chatbot_Drawer' i]").first.is_visible()
+        return page.locator(CHATBOT_DRAWER).first.is_visible()
 
     def _handle_chatbot(self, page: Page, profile: dict) -> list[str]:
         """Answer chatbot questions best-effort. Returns unanswered questions.
@@ -240,8 +253,7 @@ class NaukriAdapter(BaseAdapter):
         chatbot_Overlay div blocks pointer events on the page behind it, so
         never try to click page elements while the drawer is open.
         """
-        drawer = page.locator("div[id*='ChatbotContainer' i], div[class*='chatbotcontainer' i], "
-                              "div[class*='chatbot_Drawer' i]").first
+        drawer = page.locator(CHATBOT_DRAWER).first
         try:
             drawer.wait_for(state="visible", timeout=5000)
         except PWTimeout:

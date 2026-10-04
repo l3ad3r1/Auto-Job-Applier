@@ -19,13 +19,82 @@ from playwright.sync_api import Locator, Page, TimeoutError as PWTimeout
 from core.models import Job, QueuedItem
 from core.profile import load_profile
 from llm.answers import resolve_answer
-from .base import ApplyResult, BaseAdapter
+from .base import ApplyResult, BaseAdapter, parse_posted_age
 
 BASE = "https://in.indeed.com"
 JOB_CARD = "div.job_seen_beacon, div[data-testid='jobcard-wrapper']"
+
+
+_JOBKEY_RE = re.compile(r'"jobkey"\s*:\s*"([0-9a-f]+)"')
+_RELTIME_RE = re.compile(r'"formattedRelativeTime"\s*:\s*"([^"]+)"')
+_APPLYABLE_RE = re.compile(r'"indeedApplyEnabled"\s*:\s*(true|false)')
+
+
+def _owning_key(keys, pos):
+    """The job key belonging to the object that contains `pos`.
+
+    The payload orders its fields alphabetically, so within one job object
+    "formattedRelativeTime" and "indeedApplyEnabled" both come BEFORE "jobkey".
+    The owning key is therefore the first one that follows the value.
+
+    Pairing by smallest absolute distance instead looks reasonable and is
+    wrong: "indeedApplyEnabled" sits near the end of its object, so the closest
+    key is often the NEXT job's, silently attributing each apply flag to the
+    wrong listing.
+    """
+    for start, key in keys:
+        if start > pos:
+            return key
+    return None
+
+
+def _meta_by_jobkey(html: str) -> dict[str, dict]:
+    """Map job key -> {"age": days, "easy": bool} from the results page JSON.
+
+    Indeed renders neither fact into the card. Verified against a real
+    search-results capture: with <script> blocks stripped, there are zero
+    "N days ago" strings and zero indeedApply markers -- both live only in the
+    embedded jobcards JSON, as "formattedRelativeTime" and "indeedApplyEnabled".
+
+    The old easy-apply check looked for [data-testid='indeedApply'] and .ialbl
+    in the card DOM. Neither appears there (the class is gone entirely), so it
+    returned False for every job, and the require_easy_apply gate then excluded
+    all of Indeed -- including the ~25% that really are applyable.
+
+    Each value is attributed to the job key that follows it -- see _owning_key
+    for why "nearest key" is the wrong rule here.
+    """
+    keys = [(m.start(), m.group(1)) for m in _JOBKEY_RE.finditer(html)]
+    if not keys:
+        return {}
+    out: dict[str, dict] = {}
+    for m in _RELTIME_RE.finditer(html):
+        key = _owning_key(keys, m.start())
+        days = parse_posted_age(m.group(1))
+        if key and days >= 0:
+            out.setdefault(key, {}).setdefault("age", days)
+    for m in _APPLYABLE_RE.finditer(html):
+        key = _owning_key(keys, m.start())
+        if key:
+            out.setdefault(key, {}).setdefault("easy", m.group(1) == "true")
+    return out
+
+
 JOB_TITLE = "h2.jobTitle a, [data-testid='jobTitle'] a, a.jcs-JobTitle"
-APPLY_BTN = ("#indeedApplyButton, [data-testid='indeedApplyButton-test'], "
-             ".jobsearch-IndeedApplyButton-buttonWrapper button")
+# Indeed rebuilt the job view as React: every jobsearch-* marker is gone from
+# the page (0 occurrences in a captured failure), so the old three selectors
+# matched nothing and every attempt reported "external application" -- masking
+# stale selectors as a property of the job. The current control is an anchor,
+# not a button, hooked by data-testid. Text is the fallback.
+APPLY_BTN = ("[data-testid='viewjob-indeed-apply'], "
+             "#indeedApplyButton, [data-testid='indeedApplyButton-test'], "
+             ".jobsearch-IndeedApplyButton-buttonWrapper button, "
+             "a:has-text('Apply now'), button:has-text('Apply now')")
+
+# OneTrust consent banner. It overlays the page and swallows the click on the
+# apply control. Reject rather than accept: decline non-essential cookies.
+CONSENT_REJECT = "#onetrust-reject-all-handler, .ot-pc-refuse-all-handler"
+CONSENT_BANNER = "#onetrust-banner-sdk"
 CONTINUE_BTN = re.compile(r"^(continue|next|review your application|submit"
                           r"|submit your application)$", re.I)
 
@@ -55,6 +124,24 @@ class IndeedAdapter(BaseAdapter):
         return ("verify you are human" in body or "additional verification required" in body
                 or page.locator("[data-testid='captcha'], #challenge-form").first.count() > 0)
 
+    def _dismiss_consent(self, page: Page) -> bool:
+        """Decline non-essential cookies so the banner stops eating clicks.
+
+        Rejects rather than accepts. Returns True if a banner was dismissed.
+        """
+        try:
+            if page.locator(CONSENT_BANNER).first.count() == 0:
+                return False
+            reject = page.locator(CONSENT_REJECT).first
+            if reject.count() == 0:
+                return False
+            reject.click(timeout=5000)
+            page.wait_for_timeout(1200)
+            print("  [indeed] cookie banner dismissed (rejected non-essential)")
+            return True
+        except Exception:
+            return False  # never let consent handling fail an application
+
     # -- discovery ---------------------------------------------------------------
 
     def _search_url(self, keyword: str, location: str, cfg: dict) -> str:
@@ -79,12 +166,19 @@ class IndeedAdapter(BaseAdapter):
                     print("  !! Indeed verification wall — solve it in the browser "
                           "window, then re-run discover")
                     return list(jobs.values())
+                meta = _meta_by_jobkey(page.content())
                 cards = page.locator(JOB_CARD).all()
                 print(f"  [{keyword} / {location}] {len(cards)} cards")
                 for card in cards:
                     job = self._parse_card(card)
                     if not job:
                         continue
+                    info = meta.get(job.external_id, {})
+                    job.posted_age_days = info.get("age", -1)
+                    # The JSON is authoritative; the card selector below is only
+                    # a fallback for when the payload shape changes again.
+                    if "easy" in info:
+                        job.easy_apply = info["easy"]
                     if any(x in job.title.lower() for x in exclude):
                         continue
                     jobs[job.external_id] = job
@@ -118,8 +212,7 @@ class IndeedAdapter(BaseAdapter):
             salary=" ".join(text_of(
                 "[data-testid='attribute_snippet_testid'], .salary-snippet,"
                 " [class*='salary']").split()),
-            easy_apply=card.locator(
-                "[data-testid='indeedApply'], .ialbl").first.count() > 0,
+            easy_apply=("easily apply" in (card.inner_text() or "").lower()),
         )
 
     # -- application ---------------------------------------------------------------
@@ -133,12 +226,14 @@ class IndeedAdapter(BaseAdapter):
         page.wait_for_timeout(4000)
         if self._blocked(page):
             return ApplyResult(False, "Indeed verification wall — needs manual solve")
+        self._dismiss_consent(page)
 
         btn = page.locator(APPLY_BTN).first
         try:
             btn.wait_for(state="visible", timeout=12000)
         except PWTimeout:
-            return ApplyResult(False, "No Indeed Apply button (external application)")
+            return ApplyResult(False, "no apply control found on the job page"
+                                      " (external application, or markup changed)")
         limiter.action_delay()
         btn.click()
         page.wait_for_timeout(5000)

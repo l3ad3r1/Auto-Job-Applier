@@ -95,7 +95,12 @@ rather than rank badly: `jobs.posted_age_days` and `jobs.applicants` (`-1`
 `core/matching.py` ranks jobs **0–100**: title fit 0–40 (graded by phrase
 specificity, match position, seniority markers), freshness 0–25, easy-apply 15,
 location 10, pay 6, domain 8, crowding ±4; a reject phrase or pay below the
-floor hard-fails at −50. Thresholds: `job_spec.min_score` to reach review,
+floor hard-fails at −50. The title gate is a substring match on `target_titles`, plus one narrow
+variant: the same words side by side with "manager" moved to the front
+("Manager - Business Development", "Senior Manager, Key Accounts"), only at
+the start of the title or after a seniority word. No gaps — that would admit
+"Sales Operations Manager" for "sales manager".
+Thresholds: `job_spec.min_score` to reach review,
 `auto_apply.min_score` (+ `min_score_by_platform`) to skip it.
 
 It replaced a scorer that gave a flat +4 for any title substring hit, under
@@ -356,6 +361,18 @@ job.
 > and Indeed's `[data-testid='indeedApply']` / `.ialbl` match nothing on its
 > React page. Before concluding a platform can't be applied to, check that the
 > selector still matches something.
+
+**Naukri's screening chatbot — detect the drawer, never its wrapper.** Clicking
+Apply often opens a recruiter chatbot. The container `_…ChatbotContainer` /
+`_chatBotContainer` precedes the real `chatbot_Drawer` in the DOM and has no
+layout size (its child is fixed-position), so Playwright reports it **not
+visible**. A union selector with `.first` landed on it: a drawer open and
+showing a question within 1s was never detected, `needs manual completion`
+never fired from August onward, and every chatbot job was misfiled as
+`clicked Apply, no confirmation` (12 in the week before 2026-10-04). Found by a
+live probe that timed the drawer and printed visibility per candidate; the saved
+HTML alone could not show it. `CHATBOT_DRAWER` in `adapters/naukri.py` is the fix.
+Radio questions are answered from the profile; free text is flagged, by design.
 
 ### Expired listings
 
