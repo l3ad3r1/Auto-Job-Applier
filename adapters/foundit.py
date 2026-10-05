@@ -37,6 +37,11 @@ class FounditAdapter(BaseAdapter):
         # button, therefore logged in".
         if "foundit" not in (page.title() or "").lower():
             return False
+        # Logged out, Foundit redirects "/" to its login page, which has no
+        # "Login" button - so the button test alone reads that page as signed in
+        # (seen 2026-10-05: url .../rio/login/seeker, logged_in=True).
+        if "/login" in page.url:
+            return False
         return not page.locator("button:has-text('Login'):visible").first.count()
 
     # -- discovery ---------------------------------------------------------------

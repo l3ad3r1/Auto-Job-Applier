@@ -38,6 +38,8 @@ class ShineAdapter(BaseAdapter):
         page.wait_for_timeout(3500)
         if "shine" not in (page.title() or "").lower():
             return False
+        if "/login" in page.url:       # redirected to the sign-in page
+            return False
         # Logged out, the header shows Login/Register links to these paths.
         return not page.locator(
             "a[href*='myshine/signup']:visible, a[href*='myshine/login']:visible"
