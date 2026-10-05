@@ -141,14 +141,32 @@ class BaseAdapter(ABC):
             self._pw.stop()
 
     def interactive_login(self) -> None:
-        """Open the platform's login page and wait for the user to sign in."""
-        _, page = self.open_browser(headless=False)
-        page.goto(self.login_url)
+        """Open the platform's login page in a plain browser and wait for the user.
+
+        Deliberately NOT a Playwright-controlled window. With CDP attached,
+        Foundit's login froze with "Debugger paused in another tab" and the
+        Google sign-in popup went black (2026-10-05), and Google refuses
+        sign-in in automation-controlled browsers anyway. So this launches the
+        same Chromium binary on the same profile dir with nothing attached;
+        Playwright reads the saved cookies on its next run.
+        """
+        profile_dir = ROOT / "profiles" / self.platform
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        self._close_stale_profile_browser(profile_dir)
+        with sync_playwright() as pw:
+            exe = pw.chromium.executable_path
+        proc = subprocess.Popen([exe, f"--user-data-dir={profile_dir}",
+                                 "--no-first-run", "--no-default-browser-check",
+                                 self.login_url])
         print(f"\n  Sign in to {self.platform} in the opened browser window.")
-        print("  The session is saved to the local profile dir; you won't need "
-              "to do this again.\n  Press Enter here when you're done...")
+        print("  When you are signed in, CLOSE the browser window, then press "
+              "Enter here.\n  (Closing it normally is what saves the session.)")
         input()
-        self.close_browser()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            print("  browser still open - closing it")
+            proc.terminate()
 
     # -- platform behaviour -----------------------------------------------------
 
