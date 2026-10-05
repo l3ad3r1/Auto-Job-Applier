@@ -245,3 +245,19 @@ def test_naukri_chatbot_selector_targets_the_drawer_not_its_wrapper():
     from adapters.naukri import CHATBOT_DRAWER
     assert "chatbot_drawer" in CHATBOT_DRAWER.lower()
     assert "container" not in CHATBOT_DRAWER.lower()
+
+
+def test_posted_age_handles_article_wordings():
+    """Foundit says "Posted a day ago" / "Posted today". An exact-match test and
+    a digits-only regex both returned unknown for them, which scores the
+    freshest listings on the board as age-unknown."""
+    from adapters.base import parse_posted_age as age
+    assert age("Posted a day ago") == 1
+    assert age("Posted a week ago") == 7
+    assert age("Posted a month ago") == 30
+    assert age("an hour ago") == 0
+    assert age("Posted today") == 0
+    assert age("Posted yesterday") == 1
+    assert age("Posted 2 days ago") == 2
+    assert age("Be an early applicant") == -1      # "an" is not a count
+    assert age("banana day ago") == -1             # nor is a word ending in "a"

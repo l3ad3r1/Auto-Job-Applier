@@ -1,8 +1,10 @@
 # Progress
 
+- Completed (2026-10-05): re-queued the 12 Naukri rows from the last week that the chatbot bug had misfiled. Result: 1 applied, 11 flagged "needs manual completion" (10 are the same shape, a free-text "How many years of experience do you have in X?", plus one Naukri "Something went wrong" error after the relocation question was answered). The 43 older rows (back to Aug 19) were left alone as almost certainly closed.
+- Completed (2026-10-05): Foundit and Shine adapters, discovery only and verified live; `apply()` is inert on both until one real apply is watched in a logged-in session. `parse_posted_age` now reads "Posted a day ago" / "Posted today".
+- Next: user runs `login foundit`, `login shine`, and re-logs into Indeed; then watch one apply per new board. Decide whether to add numeric experience answers to `profile.yaml` (see the 10 blocked Naukri questions).
 - Completed (2026-10-04): diagnosed the application drop and fixed two leaks. Naukri chatbot jobs were misfiled as "no confirmation" because detection resolved to an invisible wrapper (`CHATBOT_DRAWER` now targets the drawer). The title gate now accepts reordered titles ("Manager - Business Development"); 23 distinct historical titles recovered, no false positives.
 - Findings: Hermes ran nothing 2026-09-23 to 2026-09-30 (gateway silent; the watchdog shares the machine so could not report it). Indeed's session expires repeatedly. About half of attempts fail (Naukri chatbot, Indeed external apply, LinkedIn Easy Apply missing). Caps and `auto_apply.daily_max` are not binding.
-- Next: user re-logs into Indeed (`.venv\Scripts\python.exe app.py login indeed`); consider Foundit/Shine adapters; decide whether to requeue the 12 Naukri rows failed by the misdetection.
 
 ## Latest verification
 

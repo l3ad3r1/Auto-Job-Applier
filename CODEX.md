@@ -59,6 +59,20 @@ ones — including after a failure overwrites `notes`.
 Platforms: **LinkedIn** (Easy Apply), **Naukri**, **Indeed**. Wellfound is
 configured but unused (tech boards, no market fit).
 
+**Foundit and Shine (added 2026-10-05) are discovery-only.** Search is verified
+live against their public results pages (Foundit 15/15 cards, Shine 20/20, with
+posting age on every card), but `apply()` is deliberately inert on both: it does
+not click or navigate, and returns "not verified yet - apply by hand". The
+post-click flow needs a logged-in session to observe, and a guessed success
+marker would record applications that never happened. Neither board is
+auto-approved: Shine's card says only "Apply" for every job so `easy_apply` stays
+False, and Foundit sets it only for cards tagged "Quick Apply". To finish them:
+the user runs `login foundit` / `login shine`, then ONE real apply is watched
+end to end and the adapter's `apply()` is written from what is seen. Until the
+user logs in, `doctor` reports each as `LOGIN NEEDED` (same as an expired
+Indeed session), which adds a line to the routine and watchdog reports.
+Shine's class names carry a rotating CSS-module hash — match prefixes only.
+
 Scheduled LinkedIn discovery uses a focused preset: keyword `Hiring`, posted
 within the last 24 hours, and Easy Apply only. The normal manual discovery
 command remains available. Focused results are tagged in SQLite and listed on
@@ -526,6 +540,11 @@ Beyond the hard rules in [AGENTS.md](AGENTS.md):
   user. Inventing an answer on a real application is not recoverable.
 - **One browser at a time.** Discovery and apply take minutes — run them
   sequentially with generous timeouts, never in parallel.
+  Before starting any run, check no `app.py` process is already alive
+  (`Get-CimInstance Win32_Process -Filter "Name='python.exe'"` and look for
+  `app.py`). On 2026-10-05 a launch that appeared to die had not: buffered
+  output hid it, a second launch closed its browser, and the first then wrote
+  `TargetClosedError` retry notes over the second's correct results.
 - **Do not push.** The user's standing instruction is that this work stays in
   the local repo; commit freely, but never push to `origin` unless asked. The
   `local-history` branch must never be pushed anywhere — its commit messages

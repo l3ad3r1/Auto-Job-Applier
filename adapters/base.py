@@ -43,10 +43,13 @@ def parse_posted_age(text: str) -> int:
     t = (text or "").strip().lower()
     if not t:
         return -1
-    if "just now" in t or "few hours" in t or t == "today":
+    # "Posted today" / "Posted yesterday": Foundit prefixes the wording, so an
+    # exact-match test misses it. "a day ago" is one unit, not a missing number.
+    if "just now" in t or "few hours" in t or t.split()[-1] == "today":
         return 0
-    if t == "yesterday":
+    if t.split()[-1] == "yesterday":
         return 1
+    t = re.sub(r"\b(?:a|an)\s+(?=(?:minute|hour|day|week|month|year)s?\s+ago)", "1 ", t)
     ages = [int(n) * _AGE_UNITS[unit] for n, unit in _AGE_RE.findall(t)]
     return min(ages) if ages else -1
 
