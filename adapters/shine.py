@@ -18,7 +18,7 @@ import re
 from playwright.sync_api import Locator, Page
 
 from core.models import Job, QueuedItem
-from .base import ApplyResult, BaseAdapter, parse_posted_age
+from .base import ApplyResult, BaseAdapter, parse_posted_age, search_city
 
 SALARY_HINT = re.compile(r"lakh|lac|lpa|crore", re.I)
 
@@ -55,9 +55,7 @@ class ShineAdapter(BaseAdapter):
         cfg = config.get("search", {})
         batch_limit = int(config.get("limits", {}).get("discover_batch", 40))
         exclude = [s.lower() for s in cfg.get("exclude_title", [])]
-        # First configured location only: the URL takes a single city, and
-        # "india" would return the whole country.
-        locations = (cfg.get("locations") or ["Hyderabad"])[:1]
+        locations = [search_city(cfg)]  # a city, not the config's full address
         jobs: dict[str, Job] = {}
 
         for keyword in cfg.get("keywords", []):

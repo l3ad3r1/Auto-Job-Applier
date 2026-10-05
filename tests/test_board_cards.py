@@ -174,6 +174,120 @@ def test_foundit_already_applied_is_success_without_clicking(page):
     assert result.ok is True and "already" in result.note
 
 
+# --- Foundit paging, against served fake result pages --------------------------
+
+def _card(job_id, location="Hyderabad, India", title="Key Account Manager"):
+    return (FOUNDIT_QUICK.replace("69334899", str(job_id))
+            .replace("Hyderabad </div>", location + " </div>")
+            .replace("Sales Manager", title))
+
+
+def _serve_foundit(page, catalog):
+    """catalog[(keyword, start)] -> list of card html. Records each request."""
+    from urllib.parse import parse_qs, urlparse
+    seen = []
+
+    def handler(route):
+        q = parse_qs(urlparse(route.request.url).query)
+        key = (q["query"][0], int(q.get("start", ["0"])[0]))
+        seen.append(key)
+        route.fulfill(body="<html><body>" + "".join(catalog.get(key, [])) + "</body></html>",
+                      content_type="text/html")
+
+    page.route("https://www.foundit.in/srp/results*", handler)
+    page.wait_for_timeout = lambda ms: None     # no real waiting in tests
+    return seen
+
+
+def _cfg(keywords, batch=40):
+    return {"search": {"keywords": keywords, "locations": ["Hyderabad, Telangana, India"]},
+            "limits": {"foundit_batch": batch}}
+
+
+def test_foundit_pages_through_results_and_stops_at_an_empty_page(page):
+    catalog = {("kam", 0): [_card(1), _card(2)], ("kam", 15): [_card(3)],
+               ("kam", 30): [_card(4)]}
+    seen = _serve_foundit(page, catalog)
+    jobs = FounditAdapter().search(page, _cfg(["kam"]))
+    assert [j.external_id for j in jobs] == ["1", "2", "3", "4"]
+    assert seen == [("kam", 0), ("kam", 15), ("kam", 30)]      # MAX_PAGES, no 4th
+
+
+def test_foundit_drops_cards_outside_the_search_area(page):
+    catalog = {("kam", 0): [_card(1), _card(2, "India, Sindhnur"), _card(3, "Gurugram, India"),
+                            _card(4, "Secunderabad, India")]}
+    _serve_foundit(page, catalog)
+    ids = [j.external_id for j in FounditAdapter().search(page, _cfg(["kam"]))]
+    assert ids == ["1", "4"]
+
+
+def test_foundit_stops_paging_a_keyword_with_nothing_in_area(page):
+    """Deeper pages of an all-India result set are just more of the same."""
+    catalog = {("bank", 0): [_card(1, "Mumbai, India"), _card(2, "India")],
+               ("bank", 15): [_card(3)], ("kam", 0): [_card(9)]}
+    seen = _serve_foundit(page, catalog)
+    jobs = FounditAdapter().search(page, _cfg(["bank", "kam"]))
+    assert ("bank", 15) not in seen                 # page 2 never requested
+    assert [j.external_id for j in jobs] == ["9"]
+
+
+def test_foundit_pages_breadth_first_so_no_keyword_is_starved(page):
+    catalog = {("a", 0): [_card(1), _card(2)], ("a", 15): [_card(3), _card(4)],
+               ("b", 0): [_card(11)], ("b", 15): [_card(12)]}
+    seen = _serve_foundit(page, catalog)
+    FounditAdapter().search(page, _cfg(["a", "b"]))
+    assert seen[:4] == [("a", 0), ("b", 0), ("a", 15), ("b", 15)]
+
+
+def test_foundit_respects_the_batch_limit(page):
+    catalog = {("kam", 0): [_card(i) for i in range(1, 8)], ("kam", 15): [_card(20)]}
+    seen = _serve_foundit(page, catalog)
+    jobs = FounditAdapter().search(page, _cfg(["kam"], batch=5))
+    assert len(jobs) == 5 and ("kam", 15) not in seen
+
+
+def test_search_city_takes_the_city_from_the_configs_free_text_address():
+    """config.yaml holds ONE string, "Hyderabad, Telangana, India". Both boards
+    were handed that whole string in the URL."""
+    from adapters.base import search_city
+    assert search_city({"locations": ["Hyderabad, Telangana, India"]}) == "Hyderabad"
+    assert search_city({"locations": [" Mumbai , India"]}) == "Mumbai"
+    assert search_city({"locations": []}) == "Hyderabad"
+    assert search_city({}) == "Hyderabad"
+
+
+def test_foundit_requests_a_city_not_the_whole_address(page):
+    urls = []
+    page.route("https://www.foundit.in/srp/results*",
+               lambda route: (urls.append(route.request.url),
+                              route.fulfill(body="<html></html>", content_type="text/html")))
+    page.wait_for_timeout = lambda ms: None
+    FounditAdapter().search(page, _cfg(["kam"]))
+    assert urls and "locations=hyderabad" in urls[0]
+    assert "telangana" not in urls[0].lower() and "india" not in urls[0].lower()
+
+
+def test_shine_requests_a_city_not_the_whole_address(page):
+    urls = []
+    page.route("https://www.shine.com/job-search/*",
+               lambda route: (urls.append(route.request.url),
+                              route.fulfill(body="<html></html>", content_type="text/html")))
+    page.wait_for_timeout = lambda ms: None
+    ShineAdapter().search(page, _cfg(["Key Account Manager"]))
+    assert urls and urls[0].endswith("/key-account-manager-jobs-in-hyderabad")
+
+
+def test_foundit_batch_defaults_to_three_times_discover_batch(page):
+    catalog = {("kam", 0): [_card(i) for i in range(1, 15)],
+               ("kam", 15): [_card(i) for i in range(20, 34)],
+               ("kam", 30): [_card(i) for i in range(40, 54)]}
+    _serve_foundit(page, catalog)
+    cfg = {"search": {"keywords": ["kam"], "locations": ["Hyderabad, Telangana, India"]},
+           "limits": {"discover_batch": 10}}           # no foundit_batch set
+    jobs = FounditAdapter().search(page, cfg)
+    assert len(jobs) == 30                              # 3 x 10, across 3 pages
+
+
 if __name__ == "__main__":
     import inspect
 

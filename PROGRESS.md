@@ -1,5 +1,7 @@
 # Progress
 
+- Completed (2026-10-05, evening): Foundit paging (3 pages per keyword, breadth-first, in-area filter, own `foundit_batch` cap) and a fix for a bug in both new adapters: they searched with the config's whole address string instead of the city. Live: 120 in-area Foundit jobs, 8 Quick Apply, 3 at score 70+.
+- Open: Indeed shows a Cloudflare 'Just a moment' check (user must pass it via `login indeed`); Shine needs `login shine` redone (window left open).
 - Completed (2026-10-05, later): Foundit apply verified live and implemented (Quick Apply, instant, ends on /srp/applied-success). Applied to S3connections Sales/BD Manager (Hyderabad) as the observation. A first attempt wrongly clicked a sidebar card ("Pre-Sales Consultant", UNITY Infotech, Kochi): external-apply job, nothing submitted, but Foundit now lists it as applied in the user's history. Guards and tests added.
 - Blocked: Shine. Session-only cookie is lost on browser close; `persist_session_cookies` added, but the user must redo `login shine` (window stays open) before a Shine apply can be observed.
 - Completed (2026-10-05): re-queued the 12 Naukri rows from the last week that the chatbot bug had misfiled. Result: 1 applied, 11 flagged "needs manual completion" (10 are the same shape, a free-text "How many years of experience do you have in X?", plus one Naukri "Something went wrong" error after the relocation question was answered). The 43 older rows (back to Aug 19) were left alone as almost certainly closed.

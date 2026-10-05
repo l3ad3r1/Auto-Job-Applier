@@ -55,6 +55,19 @@ def parse_posted_age(text: str) -> int:
     return min(ages) if ages else -1
 
 
+def search_city(search_cfg: dict) -> str:
+    """The city to search, from config `search.locations`.
+
+    That setting is a free-text address, not a city: the real config holds the
+    single string "Hyderabad, Telangana, India". Boards that take one city in
+    the URL (Foundit, Shine) were handed the whole string, which Foundit read as
+    "anywhere in India" and returned mass postings from other cities. The city
+    is the part before the first comma of the first entry.
+    """
+    first = (search_cfg.get("locations") or ["Hyderabad"])[0]
+    return str(first).split(",")[0].strip() or "Hyderabad"
+
+
 DEBUG_DIR = ROOT / "data" / "debug"
 
 

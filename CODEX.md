@@ -75,6 +75,23 @@ the user's Foundit history. The main button is `button[class*='jobMain']`, and
 tagged "Quick Apply" can now be auto-approved at the normal bar, subject to the
 per-platform cap (default 10/day; `limits.daily_applications.foundit`).
 
+*Foundit search pages.* Results come 15 a page, about three pages per search,
+via `&start=<n*15>&sort=1&limit=15` (no `searchId` needed; a page past the end
+has 0 cards). `search()` goes breadth-first (page 1 of every keyword, then page
+2, ...) so one keyword cannot fill the batch, keeps only cards located in the
+search city (or Secunderabad/Telangana), and stops paging a keyword whose page
+had none in area. It has its own cap, `limits.foundit_batch` (default 3x
+`discover_batch`): the shared 40 was filled by page 1 and paging never ran. Live
+result for the real config: 40 jobs/1 candidate before, 120 jobs with 8 Quick
+Apply and 3 at score 70+ after.
+
+**`search.locations` is a free-text address, not a city.** `config.yaml` holds the
+ONE string `"Hyderabad, Telangana, India"`. Foundit and Shine were handed that
+whole string in the URL; Foundit read it as "anywhere in India" and 37 of its 39
+first-run skips were other-city mass postings. `search_city()` in
+`adapters/base.py` takes the part before the first comma. Tests must use the real
+shape: the first versions passed a clean list and never saw it.
+
 *Shine apply is NOT built.* Its login is a session-only `sessionid` cookie that
 Chromium drops when the browser closes, so every fresh launch was logged out:
 the dashboard renders a signed-in shell from persistent cookies, then redirects

@@ -26,7 +26,24 @@ from urllib.parse import quote_plus
 from playwright.sync_api import Locator, Page, TimeoutError as PWTimeout
 
 from core.models import Job, QueuedItem
-from .base import ApplyResult, BaseAdapter, parse_posted_age
+from .base import ApplyResult, BaseAdapter, parse_posted_age, search_city
+
+# Foundit serves 15 results a page and about three pages per search.
+PAGE_SIZE = 15
+MAX_PAGES = 3
+
+# Where a Hyderabad search may legitimately match. Foundit's location filter is
+# loose: `locations=hyderabad` also returns India-wide postings whose location
+# reads "India, Sindhnur" or "Gurugram, India" (37 of 39 skipped jobs in the
+# first run), which then fail the location bar downstream.
+_AREA_ALIASES = {"hyderabad": ("secunderabad", "telangana")}
+
+
+def _in_area(location_text: str, city: str) -> bool:
+    text = (location_text or "").lower()
+    city = city.lower()
+    return city in text or any(a in text for a in _AREA_ALIASES.get(city, ()))
+
 
 # The main apply button only. `[class*=...]` rather than `.jobMain`: the chained
 # class selector matched nothing on the live page even though the class is there.
@@ -59,34 +76,62 @@ class FounditAdapter(BaseAdapter):
 
     def search(self, page: Page, config: dict) -> list[Job]:
         cfg = config.get("search", {})
-        batch_limit = int(config.get("limits", {}).get("discover_batch", 40))
+        limits = config.get("limits", {})
+        # Its own, larger cap. `discover_batch` bounds per-job browser cost on
+        # the other boards, but a Foundit page is one cheap load with ~15 jobs
+        # and no per-job visits - and at the shared 40 the cap was filled by
+        # page 1 of three keywords, so paging never ran (seen live 2026-10-05).
+        batch_limit = int(limits.get("foundit_batch",
+                                     3 * int(limits.get("discover_batch", 40))))
         exclude = [s.lower() for s in cfg.get("exclude_title", [])]
-        # First configured location only. Foundit takes a city; the trailing
-        # "Telangana" / "India" entries would widen the search to the whole
-        # country and bury the results in other cities' jobs.
-        locations = (cfg.get("locations") or ["Hyderabad"])[:1]
+        keywords = cfg.get("keywords", [])
+        location = search_city(cfg)     # a city, not the config's full address
         jobs: dict[str, Job] = {}
+        done: set[str] = set()      # keywords with no more worthwhile pages
 
-        for keyword in cfg.get("keywords", []):
-            for location in locations:
+        # Breadth-first: page 1 of every keyword, then page 2 of every keyword.
+        # Depth-first would let the first keyword fill the whole batch and
+        # starve the rest.
+        for page_no in range(MAX_PAGES):
+            for keyword in keywords:
                 if len(jobs) >= batch_limit:
-                    break
-                page.goto("https://www.foundit.in/srp/results?query="
-                          f"{quote_plus(keyword)}&locations={quote_plus(location.lower())}",
+                    return list(jobs.values())
+                if keyword in done:
+                    continue
+                page.goto(self._search_url(keyword, location, page_no),
                           wait_until="domcontentloaded")
                 page.wait_for_timeout(4500)
                 cards = page.locator("div.cardContainer").all()
-                print(f"  [{keyword} / {location}] {len(cards)} cards")
+                kept = 0
                 for card in cards:
                     job = self._parse_card(card)
-                    if not job:
+                    if not job or not _in_area(job.location, location):
                         continue
                     if any(x in job.title.lower() for x in exclude):
                         continue
-                    jobs[job.external_id] = job
+                    if job.external_id not in jobs:
+                        jobs[job.external_id] = job
+                        kept += 1
                     if len(jobs) >= batch_limit:
                         break
+                print(f"  [{keyword} / {location}] page {page_no + 1}: "
+                      f"{len(cards)} cards, {kept} in area")
+                # Past the last page Foundit returns no cards at all. A page
+                # with cards but none in the area means deeper pages are just
+                # more India-wide postings, so stop paging this keyword.
+                if not cards or not kept:
+                    done.add(keyword)
         return list(jobs.values())
+
+    @staticmethod
+    def _search_url(keyword: str, location: str, page_no: int) -> str:
+        base = ("https://www.foundit.in/srp/results?query="
+                f"{quote_plus(keyword)}&locations={quote_plus(location.lower())}")
+        if page_no == 0:
+            return base
+        # Offset paging, verified live 2026-10-05: no searchId needed, page 2
+        # shares nothing with page 1, and a page past the end has 0 cards.
+        return f"{base}&start={page_no * PAGE_SIZE}&sort=1&limit={PAGE_SIZE}"
 
     def _parse_card(self, card: Locator) -> Job | None:
         def text_of(sel: str) -> str:
