@@ -40,10 +40,10 @@ class ShineAdapter(BaseAdapter):
             return False
         if "/login" in page.url:       # redirected to the sign-in page
             return False
-        # Logged out, the header shows Login/Register links to these paths.
-        return not page.locator(
-            "a[href*='myshine/signup']:visible, a[href*='myshine/login']:visible"
-        ).first.count()
+        # Logged out, the header shows a Login link. The signup link is NOT a
+        # signal: a promo "Register" link stays visible on the signed-in
+        # dashboard (seen 2026-10-05), which made a good session read as out.
+        return not page.locator("a[href*='myshine/login']:visible").first.count()
 
     # -- discovery ---------------------------------------------------------------
 
