@@ -1,25 +1,36 @@
-"""Foundit (formerly Monster India) adapter: discovery now, apply once verified.
+"""Foundit (formerly Monster India) adapter: search + Quick Apply.
 
 Discovery is verified against the live public results page (2026-10-05): 15 of
 15 cards parsed with id, title and posting age. Search needs no login, but the
 adapter still reports logged-out as unhealthy so the routine says so.
 
-`apply()` does NOT click anything yet. The post-click flow (instant submit,
-questionnaire, or redirect to the company site) can only be observed with a
-logged-in session, and a guessed success marker would record applications that
-never happened. Until one real apply has been watched end to end, apply returns
-a fail-safe result and the job is left for the user to submit by hand. Nothing
-here is auto-approved either: see `easy_apply` below.
+Apply is verified against one real application the same day. "Quick Apply"
+submits instantly with no questionnaire, then lands on
+`/srp/applied-success?id=<job id>` showing "Applied just now" and a status
+timeline. Only a job whose MAIN button reads "Quick Apply" is applied to. A main
+button reading "Apply Now" redirects to the company's own site, so it is
+reported as external and never clicked.
+
+The job page repeats `id="applyBtn"` on SEVEN buttons: the main one, a hidden
+sticky copy, and one per "Recommended Jobs" card. A selector built on that id or
+on the text "Apply Now" clicks a different job's button - which is exactly what
+happened on the first observation attempt (it marked an unrelated Kochi job as
+applied in the user's history). The main button is the one whose class contains
+`jobMain`, and the click is refused unless exactly one element matches.
 """
 from __future__ import annotations
 
 import re
 from urllib.parse import quote_plus
 
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Locator, Page, TimeoutError as PWTimeout
 
 from core.models import Job, QueuedItem
 from .base import ApplyResult, BaseAdapter, parse_posted_age
+
+# The main apply button only. `[class*=...]` rather than `.jobMain`: the chained
+# class selector matched nothing on the live page even though the class is there.
+MAIN_APPLY = "button[class*='jobMain']"
 
 SALARY_HINT = re.compile(r"lpa|lakh|lac|inr|₹|\bper\b", re.I)
 
@@ -110,8 +121,44 @@ class FounditAdapter(BaseAdapter):
     def collect_questions(self, page: Page, item: QueuedItem) -> list[str]:
         return []
 
+    def _already_applied(self, page: Page) -> bool:
+        # The status timeline ("Your application status") only renders for a job
+        # the user has applied to.
+        return page.get_by_text("Your application status").first.count() > 0
+
     def apply(self, page: Page, item: QueuedItem, limiter) -> ApplyResult:
-        # Deliberately inert: see the module docstring. No click, no navigation.
-        return ApplyResult(
-            False, "foundit apply is not verified yet - open the job and apply "
-                   f"by hand: {item.job.url}")
+        page.goto(item.job.url, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+
+        if self._already_applied(page):
+            return ApplyResult(True, "was already applied on Foundit")
+
+        btn = page.locator(MAIN_APPLY)
+        try:
+            btn.first.wait_for(state="visible", timeout=15000)
+        except PWTimeout:
+            return ApplyResult(False, "Apply button not found")
+        if btn.count() != 1:
+            # Never guess between buttons: the sidebar cards share the id.
+            return ApplyResult(False, f"apply button ambiguous ({btn.count()} matches)")
+
+        label = " ".join((btn.first.inner_text() or "").split())
+        if label.lower() != "quick apply":
+            return ApplyResult(
+                False, f"external application (main button reads {label!r}, "
+                       "not Quick Apply)")
+
+        limiter.action_delay()
+        btn.first.click(timeout=8000)
+        page.wait_for_timeout(6000)
+
+        # Success lands on /srp/applied-success, sometimes in a second tab.
+        landed = any("applied-success" in pg.url for pg in page.context.pages)
+        for extra in [pg for pg in page.context.pages if pg is not page]:
+            try:
+                extra.close()
+            except Exception:
+                pass
+        if landed or self._already_applied(page):
+            return ApplyResult(True)
+        return ApplyResult(False, "clicked Quick Apply, no confirmation")

@@ -99,17 +99,79 @@ def test_shine_is_never_marked_easy_apply(page):
     assert ShineAdapter()._parse_card(page.locator("article").first).easy_apply is False
 
 
-def test_new_boards_apply_is_inert_until_verified():
+def test_shine_apply_is_inert_until_verified():
     """No click, no navigation: a guessed success marker would record
     applications that never happened. Passing None for page proves it."""
     from core.models import Job, QueuedItem
-    for adapter, host in ((FounditAdapter(), "foundit.in"), (ShineAdapter(), "shine.com")):
-        job = Job(platform=adapter.platform, external_id="1", title="t", company="c",
-                  url=f"https://www.{host}/job/1")
-        item = QueuedItem.__new__(QueuedItem)
-        item.job = job
-        result = adapter.apply(None, item, None)
-        assert result.ok is False and "not verified" in result.note
+    adapter = ShineAdapter()
+    job = Job(platform="shine", external_id="1", title="t", company="c",
+              url="https://www.shine.com/jobs/x/y/1")
+    item = QueuedItem.__new__(QueuedItem)
+    item.job = job
+    result = adapter.apply(None, item, None)
+    assert result.ok is False and "not verified" in result.note
+
+
+# --- Foundit apply, against a served copy of the page structure -----------------
+# The live job page repeats id="applyBtn" on SEVEN buttons: a hidden sticky copy,
+# the main one, and one per "Recommended Jobs" card. Clicking the wrong one marked
+# an unrelated job as applied in the user's history (2026-10-05).
+
+def _job_page(main_label="Quick Apply", extra_main=False, applied=False):
+    on_main = ("window.__clicked = 'main'; document.body.insertAdjacentHTML("
+               "'beforeend', '<p>Your application status</p>')")
+    main = ('<button id="applyBtn" class="button button--primary applyJob__btn jobMain" '
+            f'onclick="{on_main}">{main_label}</button>')
+    sidebar = "".join(
+        '<button id="applyBtn" class="button button--secondary applyJob applyJob__card" '
+        'onclick="window.__clicked = \'sidebar\'">Apply Now</button>' for _ in range(3))
+    sticky = ('<button id="applyBtn" class="button button--primary applyJob__btn jobScroll" '
+              'style="display:none">Quick Apply</button>')
+    status = "<p>Your application status</p>" if applied else ""
+    return ("<html><body><h1>Sales Manager</h1>" + sticky + main
+            + (main if extra_main else "") + sidebar + status + "</body></html>")
+
+
+class _NoDelay:
+    def action_delay(self):
+        pass
+
+
+def _run_foundit_apply(page, html):
+    from core.models import Job, QueuedItem
+    page.route("https://www.foundit.in/job/*",
+               lambda route: route.fulfill(body=html, content_type="text/html"))
+    job = Job(platform="foundit", external_id="1", title="t", company="c",
+              url="https://www.foundit.in/job/1")
+    item = QueuedItem.__new__(QueuedItem)
+    item.job = job
+    result = FounditAdapter().apply(page, item, _NoDelay())
+    return result, page.evaluate("window.__clicked")
+
+
+def test_foundit_apply_clicks_only_the_main_button(page):
+    result, clicked = _run_foundit_apply(page, _job_page())
+    assert clicked == "main"          # never one of the sidebar cards
+    assert result.ok is True
+
+
+def test_foundit_main_button_that_is_not_quick_apply_is_not_clicked(page):
+    """"Apply Now" on the main button redirects to the company's own site."""
+    result, clicked = _run_foundit_apply(page, _job_page(main_label="Apply Now"))
+    assert clicked is None
+    assert result.ok is False and "external" in result.note
+
+
+def test_foundit_refuses_to_guess_between_two_main_buttons(page):
+    result, clicked = _run_foundit_apply(page, _job_page(extra_main=True))
+    assert clicked is None
+    assert result.ok is False and "ambiguous" in result.note
+
+
+def test_foundit_already_applied_is_success_without_clicking(page):
+    result, clicked = _run_foundit_apply(page, _job_page(applied=True))
+    assert clicked is None
+    assert result.ok is True and "already" in result.note
 
 
 if __name__ == "__main__":

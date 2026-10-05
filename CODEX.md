@@ -59,18 +59,36 @@ ones — including after a failure overwrites `notes`.
 Platforms: **LinkedIn** (Easy Apply), **Naukri**, **Indeed**. Wellfound is
 configured but unused (tech boards, no market fit).
 
-**Foundit and Shine (added 2026-10-05) are discovery-only.** Search is verified
-live against their public results pages (Foundit 15/15 cards, Shine 20/20, with
-posting age on every card), but `apply()` is deliberately inert on both: it does
-not click or navigate, and returns "not verified yet - apply by hand". The
-post-click flow needs a logged-in session to observe, and a guessed success
-marker would record applications that never happened. Neither board is
-auto-approved: Shine's card says only "Apply" for every job so `easy_apply` stays
-False, and Foundit sets it only for cards tagged "Quick Apply". To finish them:
-the user runs `login foundit` / `login shine`, then ONE real apply is watched
-end to end and the adapter's `apply()` is written from what is seen. Until the
-user logs in, `doctor` reports each as `LOGIN NEEDED` (same as an expired
-Indeed session), which adds a line to the routine and watchdog reports.
+**Foundit and Shine (added 2026-10-05).** Search is verified live on both public
+results pages (Foundit 15/15 cards, Shine 20/20, posting age on every card).
+
+*Foundit apply is verified and live.* One real application was watched end to
+end: "Quick Apply" submits instantly with no questionnaire and lands on
+`/srp/applied-success?id=<id>` ("Applied just now"). Only a job whose MAIN
+button reads "Quick Apply" is applied to; "Apply Now" on the main button means
+the company's own site and is reported as external. **The job page repeats
+`id="applyBtn"` on seven buttons** (hidden sticky copy, the main one, one per
+Recommended-Jobs card), so never select by that id or by "Apply Now" text: the
+first observation attempt did, and marked an unrelated Kochi job as applied in
+the user's Foundit history. The main button is `button[class*='jobMain']`, and
+`apply()` refuses to click unless exactly one element matches. Foundit jobs
+tagged "Quick Apply" can now be auto-approved at the normal bar, subject to the
+per-platform cap (default 10/day; `limits.daily_applications.foundit`).
+
+*Shine apply is NOT built.* Its login is a session-only `sessionid` cookie that
+Chromium drops when the browser closes, so every fresh launch was logged out:
+the dashboard renders a signed-in shell from persistent cookies, then redirects
+to login after ~5s (which also fooled `is_logged_in` until it learned to wait).
+`persist_session_cookies = True` on the adapter saves the cookies after a run
+that verified a login and restores them at the next start; the login for such a
+platform runs in a Playwright window and the user must NOT close it. `apply()`
+stays inert until one real Shine apply has been watched. `easy_apply` stays
+False on Shine (its card says only "Apply"), so nothing is auto-approved.
+
+*Login mode differs by site.* Default is a plain, non-automated browser: with
+CDP attached Foundit's sign-in froze ("Debugger paused in another tab") and the
+Google popup went black. There the user closes the window to save. Shine is the
+exception (above): window stays open.
 Shine's class names carry a rotating CSS-module hash — match prefixes only.
 
 Scheduled LinkedIn discovery uses a focused preset: keyword `Hiring`, posted

@@ -30,20 +30,24 @@ def _slug(text: str) -> str:
 class ShineAdapter(BaseAdapter):
     platform = "shine"
     login_url = "https://www.shine.com/pages/myshine/login"
+    # The login is a session-only `sessionid` cookie; see BaseAdapter.
+    persist_session_cookies = True
 
     # -- session ---------------------------------------------------------------
 
     def is_logged_in(self, page: Page) -> bool:
-        page.goto("https://www.shine.com/", wait_until="domcontentloaded")
-        page.wait_for_timeout(3500)
+        # /dashboard is protected, but it renders a signed-in-looking shell from
+        # persistent cookies BEFORE the server rejects the missing session and
+        # the page redirects to login (seen 2026-10-05: /dashboard at 2s,
+        # /pages/myshine/login at 5s). So wait for the redirect to happen.
+        page.goto("https://www.shine.com/dashboard", wait_until="domcontentloaded")
+        page.wait_for_timeout(9000)
         if "shine" not in (page.title() or "").lower():
             return False
-        if "/login" in page.url:       # redirected to the sign-in page
+        if "login" in page.url or "onboarding" in page.url:
             return False
-        # Logged out, the header shows a Login link. The signup link is NOT a
-        # signal: a promo "Register" link stays visible on the signed-in
-        # dashboard (seen 2026-10-05), which made a good session read as out.
-        return not page.locator("a[href*='myshine/login']:visible").first.count()
+        self._session_ok = True      # lets close_browser() save the cookies
+        return True
 
     # -- discovery ---------------------------------------------------------------
 

@@ -6,6 +6,7 @@ and every later run reuses that session. Credentials are never handled here.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import time
@@ -66,6 +67,14 @@ class ApplyResult:
 class BaseAdapter(ABC):
     platform: str = ""
     login_url: str = ""
+    # Some sites keep the login in a session-only cookie, which Chromium drops
+    # when the browser closes - so a login that worked yesterday is gone today.
+    # When True, cookies are saved after a run that verified a login and put
+    # back at the next launch, and the login itself runs in a Playwright window
+    # so there is a run to capture them from. Shine (2026-10-05): the dashboard
+    # shell loaded from persistent cookies, then redirected to login.
+    persist_session_cookies: bool = False
+    _session_ok: bool = False       # set by is_logged_in() on a verified login
 
     # -- browser lifecycle ----------------------------------------------------
 
@@ -98,7 +107,31 @@ class BaseAdapter(ABC):
                 raise
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         self._ctx = ctx
+        self._session_ok = False
+        self._restore_session_cookies(ctx)
         return ctx, page
+
+    def _cookie_file(self) -> Path:
+        return ROOT / "profiles" / self.platform / "session-cookies.json"
+
+    def _restore_session_cookies(self, ctx: BrowserContext) -> None:
+        if not self.persist_session_cookies or not self._cookie_file().exists():
+            return
+        try:
+            ctx.add_cookies(json.loads(self._cookie_file().read_text(encoding="utf-8")))
+        except Exception as e:
+            print(f"  [{self.platform}] could not restore saved cookies: {e}")
+
+    def _save_session_cookies(self) -> None:
+        """Only after a verified login: saving a logged-out cookie jar over a
+        good one is how a working session would be lost."""
+        if not (self.persist_session_cookies and self._session_ok):
+            return
+        try:
+            self._cookie_file().write_text(
+                json.dumps(self._ctx.cookies(), indent=1), encoding="utf-8")
+        except Exception as e:
+            print(f"  [{self.platform}] could not save cookies: {e}")
 
     @staticmethod
     def _close_stale_profile_browser(profile_dir: Path) -> None:
@@ -136,20 +169,32 @@ class BaseAdapter(ABC):
 
     def close_browser(self) -> None:
         try:
+            self._save_session_cookies()
             self._ctx.close()
         finally:
             self._pw.stop()
 
     def interactive_login(self) -> None:
-        """Open the platform's login page in a plain browser and wait for the user.
+        """Open the platform's login page and wait for the user to sign in.
 
-        Deliberately NOT a Playwright-controlled window. With CDP attached,
+        Default: a plain browser, deliberately NOT Playwright-controlled. With CDP attached,
         Foundit's login froze with "Debugger paused in another tab" and the
         Google sign-in popup went black (2026-10-05), and Google refuses
         sign-in in automation-controlled browsers anyway. So this launches the
         same Chromium binary on the same profile dir with nothing attached;
         Playwright reads the saved cookies on its next run.
         """
+        if self.persist_session_cookies:
+            # Needs a Playwright run to capture the session cookie from, and
+            # the user must NOT close the window: that is what drops it.
+            ctx, page = self.open_browser(headless=False)
+            page.goto(self.login_url)
+            print(f"\n  Sign in to {self.platform} in the opened browser window.")
+            print("  Do NOT close the window. When you are signed in, press Enter here.")
+            input()
+            self._session_ok = True
+            self.close_browser()
+            return
         profile_dir = ROOT / "profiles" / self.platform
         profile_dir.mkdir(parents=True, exist_ok=True)
         self._close_stale_profile_browser(profile_dir)
