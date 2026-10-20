@@ -19,6 +19,18 @@ discover → score/prepare → YOU approve in the dashboard → apply (paced, ca
 - **Screening answers** — exact answers from your `profile.yaml` map first,
   then a local LLM (Ollama) grounded strictly in your profile; anything it
   can't answer truthfully gets flagged for you instead of guessed
+- **Title rescue** — titles the keyword matcher just missed ("Key Accounts
+  Manager", "Head Of Business Development") get one batched local-LLM second
+  look at prepare time; rescued jobs go to review flagged, never auto-approved
+- **Posting guard** — scraped text is stripped of invisible characters (which
+  can hide a dealbreaker phrase from the matcher), and text aimed at an AI
+  ("ignore previous instructions") or look-alike letters is flagged and held
+  from auto-approve. See [core/posting_guard.py](core/posting_guard.py)
+- **Repost flag** — the same company re-listing the same title and location
+  on a later day is flagged as a possible ghost posting
+- **Closed-posting detection** — when the apply button is missing, the job
+  page is checked for "no longer accepting applications" banners and the row
+  is marked `expired` instead of failed (no retry, no debug capture)
 - **Salary capture** — posted ranges parsed (Lacs P.A., ₹/month, ₹/year) and
   shown in the dashboard
 - **Safety rails** — per-platform daily caps, randomized delays, fail-safe

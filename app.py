@@ -70,6 +70,8 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
         worth protecting, so its bar stays high while a safer board can run
         lower without dragging LinkedIn volume up with it.
       * no unanswered screening questions -- never guess on a real application
+      * no posting-guard flag (text aimed at an AI, tampered characters)
+        and no LLM-rescued title: those always get a human read
       * easy_apply only when require_easy_apply (external ATS just fails)
       * auto_apply.daily_max unreviewed promotions per day, counted from the
         notes marker, on top of the normal per-platform caps in safety.py
@@ -80,6 +82,8 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
     import json as _json
 
     from core.matching import score_job
+    from core.posting_guard import FLAG as POSTING_GUARD_FLAG
+    from core.title_rescue import FLAG as RESCUE_FLAG
 
     cfg = (load_config().get("auto_apply") or {})
     if not cfg.get("enabled"):
@@ -113,6 +117,13 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
             continue
         if unanswered:
             held.append((job.title, f"{len(unanswered)} unanswered question(s)"))
+            continue
+        if POSTING_GUARD_FLAG in app.flags:
+            # Text aimed at an AI, or tampered characters: a human reads it.
+            held.append((job.title, "posting guard flag"))
+            continue
+        if RESCUE_FLAG in app.flags:
+            held.append((job.title, "title rescued by LLM"))
             continue
         if need_easy and not job.easy_apply:
             held.append((job.title, "not easy-apply"))
@@ -221,8 +232,10 @@ def cmd_prepare() -> None:
 
     Non-matching jobs are auto-skipped with the scoring reason recorded.
     Questions we can't answer from profile.yaml are flagged, not guessed.
+    Near-miss titles get one batched local-LLM second look (title rescue).
     """
-    from core.matching import is_match
+    from core.matching import RESCUED_TITLE_POINTS, is_match
+    from core.title_rescue import FLAG as RESCUE_FLAG
 
     profile = load_profile()
     spec = profile.get("job_spec", {})
@@ -231,9 +244,24 @@ def cmd_prepare() -> None:
     if not items:
         print("Nothing to prepare. Run discover first.")
         return
+    results = {item.app_id: is_match(item.job, spec) for item in items}
+    near_miss = [item.job.title for item in items
+                 if not results[item.app_id][0]
+                 and "title not in target_titles" in results[item.app_id][1].reasons
+                 and results[item.app_id][1].score + RESCUED_TITLE_POINTS
+                 >= int(spec.get("min_score", 4))]
+    rescued = _rescue_titles(near_miss, spec.get("target_titles", []))
+    if near_miss:
+        print(f"Title rescue: {len(rescued)} of {len(set(near_miss))} near-miss"
+              " title(s) rescued for review")
     skipped = 0
     for item in items:
-        ok, result = is_match(item.job, spec)
+        ok, result = results[item.app_id]
+        if not ok and item.job.title in rescued:
+            ok, result = is_match(item.job, spec, title_rescued=True)
+            if ok:
+                queue.add_flag(item.app_id, f"{RESCUE_FLAG} - not in"
+                               " target_titles; never auto-approved")
         if not ok:
             queue.set_state(item.app_id, State.SKIPPED, notes=result.summary)
             skipped += 1
@@ -251,6 +279,19 @@ def cmd_prepare() -> None:
                                profile.get("resume_path", ""))
     print(f"Prepared {len(items) - skipped} matching applications → pending review "
           f"({skipped} skipped as non-matching). Run: python app.py review")
+
+
+def _rescue_titles(titles: list[str], targets: list[str]) -> set[str]:
+    """Run core.title_rescue against the configured local LLM, if enabled."""
+    from core.title_rescue import rescue_titles
+    from llm.answers import _llm_cfg
+    from llm.client import chat
+
+    cfg = _llm_cfg()
+    if not titles or not cfg["enabled"]:
+        return set()
+    return rescue_titles(titles, targets, lambda system, user: chat(
+        cfg["base_url"], cfg["model"], system, user))
 
 
 def cmd_review() -> None:
@@ -296,6 +337,10 @@ def cmd_apply(platform: str, limit: int | None = None) -> None:
                 queue.set_state(item.app_id, State.APPLIED)
                 queue.log_submission(platform, item.app_id)
                 print("applied ✓")
+            elif result.expired:
+                # Not a tool failure: no debug capture, no retry.
+                queue.set_state(item.app_id, State.EXPIRED, notes=result.note)
+                print(f"expired: {result.note}")
             else:
                 shot = adapter.capture_debug(page, f"app{item.app_id}")
                 note = f"{result.note} [debug: {shot}]"

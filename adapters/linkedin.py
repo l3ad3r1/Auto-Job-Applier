@@ -469,7 +469,8 @@ class LinkedInAdapter(BaseAdapter):
         profile = load_profile()
         answers = dict(item.application.answers)
         if not self._open_easy_apply(page, item):
-            return ApplyResult(False, "Easy Apply button/modal not found")
+            return self.closed_posting(page) or ApplyResult(
+                False, "Easy Apply button/modal not found")
 
         last_progress = None
         for _ in range(12):

@@ -68,6 +68,9 @@ class Application:
     unanswered: list = field(default_factory=list)
     resume_path: str = ""
     notes: str = ""               # failure reasons, adapter remarks
+    # Warnings fixed at discovery (posting guard, repost). Its own column
+    # because set_state overwrites `notes` on every failure and retry.
+    flags: str = ""
     updated_at: str = field(default_factory=utcnow)
 
     def answers_json(self) -> str:
@@ -93,5 +96,6 @@ class QueuedItem:
             unanswered=self.application.unanswered,
             resume_path=self.application.resume_path,
             notes=self.application.notes,
+            flags=self.application.flags,
         )
         return d

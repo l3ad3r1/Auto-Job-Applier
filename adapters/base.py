@@ -17,6 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Error as PWError, Page, sync_playwright
 
+from core.liveness import closed_reason
 from core.models import Job, QueuedItem
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -75,6 +76,7 @@ DEBUG_DIR = ROOT / "data" / "debug"
 class ApplyResult:
     ok: bool
     note: str = ""
+    expired: bool = False         # the posting is closed; not a tool failure
 
 
 class BaseAdapter(ABC):
@@ -179,6 +181,19 @@ class BaseAdapter(ABC):
             return str(base.relative_to(ROOT)) + ".png"
         except Exception as e:
             return f"(debug capture failed: {type(e).__name__})"
+
+    def closed_posting(self, page: Page) -> ApplyResult | None:
+        """An expired result when the job page says the posting is closed.
+
+        Called only where the apply control is missing, so it can relabel a
+        failure but never stop a live application.
+        """
+        try:
+            text = page.inner_text("body", timeout=5000)
+        except PWError:
+            return None
+        reason = closed_reason(text)
+        return ApplyResult(False, f"posting closed: {reason!r}", expired=True)             if reason else None
 
     def close_browser(self) -> None:
         try:

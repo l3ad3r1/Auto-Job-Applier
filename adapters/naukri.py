@@ -179,11 +179,13 @@ class NaukriAdapter(BaseAdapter):
 
         btn = self._apply_button(page)
         if btn is None:
-            return ApplyResult(False, "Apply button not found")
+            return self.closed_posting(page) or ApplyResult(
+                False, "Apply button not found")
         try:
             btn.wait_for(state="visible", timeout=10000)
         except PWTimeout:
-            return ApplyResult(False, "Apply button never became visible")
+            return self.closed_posting(page) or ApplyResult(
+                False, "Apply button never became visible")
         limiter.action_delay()
         btn.scroll_into_view_if_needed()
         self._click_apply(btn)

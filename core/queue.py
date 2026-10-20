@@ -6,15 +6,28 @@ one `applications` row tracking its pipeline state.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
 from .models import Application, Job, QueuedItem, State, utcnow
+from .posting_guard import scan
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "data" / "queue.db"
+
+# How far back a repost is looked for. Adapted from career-ops
+# detect-reposts.mjs (MIT), which uses the same 90-day window.
+REPOST_WINDOW_DAYS = 90
+
+
+def title_identity(title: str) -> frozenset[str]:
+    """The SET of title words, so word order and punctuation churn between two
+    listings of one role still match, but "Sales Manager - Pune" and
+    "Sales Manager - Delhi" (two real openings) do not."""
+    return frozenset(re.findall(r"[a-z0-9]+", title.lower()))
 
 
 def _col(row: sqlite3.Row, name: str, default):
@@ -134,12 +147,26 @@ class Queue:
                 "ALTER TABLE applications ADD COLUMN outcome TEXT DEFAULT ''")
             self.conn.execute(
                 "ALTER TABLE applications ADD COLUMN outcome_at TEXT DEFAULT ''")
+        if "flags" not in acols:
+            # Discovery-time warnings (posting guard, repost); see models.
+            self.conn.execute(
+                "ALTER TABLE applications ADD COLUMN flags TEXT DEFAULT ''")
         self.conn.commit()
 
     # -- discovery -----------------------------------------------------------
 
     def add_job(self, job: Job) -> Optional[int]:
-        """Insert a job + fresh application row. Returns app id, or None if duplicate."""
+        """Insert a job + fresh application row. Returns app id, or None if duplicate.
+
+        Posting text is cleaned by the posting guard before it is stored, and
+        a new row is checked for being a repost of an earlier listing.
+        """
+        flags = []
+        for attr in ("title", "company", "description"):
+            cleaned, report = scan(getattr(job, attr))
+            setattr(job, attr, cleaned)
+            if report.suspicious:
+                flags.append(report.summary)
         tagged_at = job.source_tagged_at or (utcnow() if job.source_tag else "")
         cur = self.conn.execute(
             """INSERT OR IGNORE INTO jobs
@@ -165,14 +192,60 @@ class Queue:
                 self.conn.commit()
             return None  # already known
         job_id = cur.lastrowid
+        repost = self._repost_of(job)
+        if repost:
+            flags.append(repost)
         cur = self.conn.execute(
-            "INSERT INTO applications (job_id, state, updated_at) VALUES (?,?,?)",
-            (job_id, State.DISCOVERED.value, utcnow()),
+            "INSERT INTO applications (job_id, state, updated_at, flags)"
+            " VALUES (?,?,?,?)",
+            (job_id, State.DISCOVERED.value, utcnow(), "; ".join(flags)),
         )
         self.conn.commit()
         return cur.lastrowid
 
+    def _repost_of(self, job: Job) -> str:
+        """A flag when the same company listed the same title before, on an
+        earlier day, under a different id. Empty string otherwise.
+
+        A repost can mean a ghost posting (kept up to collect CVs) or a role
+        nobody accepted. Two constraints, both from career-ops, keep sibling
+        openings from reading as reposts: the earlier listing must be from a
+        DIFFERENT day (one sweep finding two ids lists parallel openings, not
+        a repost), and titles must have the same word set, not merely similar
+        ones. Location is compared the same way: Naukri lists one title in many
+        towns ("Branch Manager - GL South" x 23 at Bajaj Finance), and those
+        are separate openings. Same platform only: one opening cross-posted to LinkedIn and
+        Naukri is syndication, not a repost.
+        """
+        if not job.company.strip():
+            return ""
+        day = job.discovered_at[:10]
+        cutoff = (datetime.fromisoformat(job.discovered_at)
+                  - timedelta(days=REPOST_WINDOW_DAYS)).isoformat()
+        want = (title_identity(job.title), title_identity(job.location))
+        rows = self.conn.execute(
+            """SELECT external_id, title, location, discovered_at FROM jobs
+               WHERE platform=? AND lower(company)=lower(?) AND external_id<>?
+                 AND discovered_at >= ? AND substr(discovered_at, 1, 10) < ?
+               ORDER BY discovered_at""",
+            (job.platform, job.company.strip(), job.external_id, cutoff, day))
+        for row in rows:
+            if (title_identity(row["title"]),
+                    title_identity(row["location"])) == want:
+                return (f"repost: same title listed {row['discovered_at'][:10]}"
+                        f" as {row['external_id']} - possible ghost posting")
+        return ""
+
     # -- state transitions ---------------------------------------------------
+
+    def add_flag(self, app_id: int, flag: str) -> None:
+        """Append a warning to the row's durable flags column."""
+        self.conn.execute(
+            "UPDATE applications SET flags = CASE WHEN IFNULL(flags,'')=''"
+            " THEN ? ELSE flags || '; ' || ? END WHERE id=?",
+            (flag, flag, app_id))
+        self.conn.commit()
+
 
     def set_state(self, app_id: int, state: State | str, notes: str = "") -> None:
         state = state.value if isinstance(state, State) else state
@@ -309,6 +382,7 @@ class Queue:
             answers=json.loads(row["answers"]),
             unanswered=json.loads(row["unanswered"]),
             resume_path=row["resume_path"], notes=row["notes"],
+            flags=_col(row, "flags", ""),
             updated_at=row["updated_at"],
         )
         return QueuedItem(app_id=row["app_id"], job=job, application=app)

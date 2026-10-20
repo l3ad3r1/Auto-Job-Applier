@@ -56,6 +56,7 @@
     <div class="meta">{{ item.company }} · {{ item.location }} ·
       {% if item.salary %}<span class="sal">{{ item.salary }}</span>
       {% else %}<span class="sal-na">salary not disclosed</span>{% endif %}</div>
+    {% if item.flags %}<div class="flag">⚠ {{ item.flags }}</div>{% endif %}
     {% if item.answers %}
     <dl class="qa">
       {% for question, answer in item.answers.items() %}

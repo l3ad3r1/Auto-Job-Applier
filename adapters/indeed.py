@@ -232,8 +232,9 @@ class IndeedAdapter(BaseAdapter):
         try:
             btn.wait_for(state="visible", timeout=12000)
         except PWTimeout:
-            return ApplyResult(False, "no apply control found on the job page"
-                                      " (external application, or markup changed)")
+            return self.closed_posting(page) or ApplyResult(
+                False, "no apply control found on the job page"
+                       " (external application, or markup changed)")
         limiter.action_delay()
         btn.click()
         page.wait_for_timeout(5000)

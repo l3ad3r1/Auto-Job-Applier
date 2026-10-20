@@ -112,7 +112,13 @@ def _reordered_hit(target: str, title_tokens: list[str]) -> bool:
     return False
 
 
-def _title_points(title: str, spec: dict) -> tuple[int, list[str]]:
+# What a title the LLM rescued is worth: the same as a bare one-word match.
+# It only tops up rows that were already near the bar on everything else.
+RESCUED_TITLE_POINTS = 14
+
+
+def _title_points(title: str, spec: dict,
+                  rescued: bool = False) -> tuple[int, list[str]]:
     """0-40. Graded by how specifically the title matches, not merely whether.
 
     The old scorer gave a flat +4 to any target_titles substring hit, so
@@ -124,25 +130,28 @@ def _title_points(title: str, spec: dict) -> tuple[int, list[str]]:
     targets = [t.lower() for t in spec.get("target_titles", [])]
     tokens = _title_tokens(title)
     hits = [t for t in targets if t in title or _reordered_hit(t, tokens)]
-    if not hits:
+    if not hits and not rescued:
         return 0, ["title not in target_titles"]
 
-    best = max(hits, key=len)
-    # Specificity: "area sales manager" (3 words) beats bare "sales manager".
-    words = len(best.split())
-    points = {1: 14, 2: 20}.get(words, 26)
-    reasons = [f"title~{best!r}"]
+    if hits:
+        best = max(hits, key=len)
+        # Specificity: "area sales manager" (3 words) beats bare "sales manager".
+        words = len(best.split())
+        points = {1: 14, 2: 20}.get(words, 26)
+        reasons = [f"title~{best!r}"]
 
-    # A match at the front is the role; deep in the string it is often a
-    # qualifier ("Intern supporting the Sales Manager").
-    if title.startswith(best):
-        points += 6
-        reasons.append("title starts with the match")
+        # A match at the front is the role; deep in the string it is often a
+        # qualifier ("Intern supporting the Sales Manager").
+        if title.startswith(best):
+            points += 6
+            reasons.append("title starts with the match")
 
-    # The title is nearly all match, rather than one clause of many.
-    if len(best) / max(len(title), 1) > 0.6:
-        points += 4
-        reasons.append("title is a tight match")
+        # The title is nearly all match, rather than one clause of many.
+        if len(best) / max(len(title), 1) > 0.6:
+            points += 4
+            reasons.append("title is a tight match")
+    else:
+        points, reasons = RESCUED_TITLE_POINTS, ["title rescued by LLM"]
 
     if any(m in title for m in SENIOR_MARKERS):
         points += 4
@@ -178,7 +187,7 @@ def _freshness_points(job: Job) -> tuple[int, list[str]]:
     return 0, [f"posted {age}d ago - likely expired"]
 
 
-def score_job(job: Job, spec: dict) -> MatchResult:
+def score_job(job: Job, spec: dict, title_rescued: bool = False) -> MatchResult:
     """Rank a job 0-100. Higher is a better, more applicable match.
 
     Components: title fit (0-40), freshness (0-25), appliability (0-15),
@@ -198,7 +207,7 @@ def score_job(job: Job, spec: dict) -> MatchResult:
     if floor and rng and rng[1] < float(floor):
         return MatchResult(-50, [f"salary {job.salary!r} tops out below {floor} LPA"])
 
-    pts, why = _title_points(title, spec)
+    pts, why = _title_points(title, spec, title_rescued)
     score += pts
     reasons += why
 
@@ -245,6 +254,7 @@ def score_job(job: Job, spec: dict) -> MatchResult:
     return MatchResult(max(0, min(100, score)), reasons)
 
 
-def is_match(job: Job, spec: dict) -> tuple[bool, MatchResult]:
-    result = score_job(job, spec)
+def is_match(job: Job, spec: dict,
+             title_rescued: bool = False) -> tuple[bool, MatchResult]:
+    result = score_job(job, spec, title_rescued)
     return result.score >= int(spec.get("min_score", 4)), result

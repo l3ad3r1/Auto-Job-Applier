@@ -182,7 +182,8 @@ class FounditAdapter(BaseAdapter):
         try:
             btn.first.wait_for(state="visible", timeout=15000)
         except PWTimeout:
-            return ApplyResult(False, "Apply button not found")
+            return self.closed_posting(page) or ApplyResult(
+                False, "Apply button not found")
         if btn.count() != 1:
             # Never guess between buttons: the sidebar cards share the id.
             return ApplyResult(False, f"apply button ambiguous ({btn.count()} matches)")
