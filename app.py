@@ -13,6 +13,8 @@
   python app.py sync-sheet           append new applied jobs to the Google Sheet
   python app.py job-board            rebuild the detailed Excel job board
   python app.py retire-stale         retire pending listings older than 14 days
+  python app.py patterns             apply success and interview rate breakdowns
+  python app.py followups            applications due a follow-up (7+ days)
 """
 from __future__ import annotations
 
@@ -486,6 +488,28 @@ def cmd_retire_stale(days: int = STALE_PENDING_DAYS) -> None:
     print(f"Retired {retired} pending listing(s) older than {days} days as expired.")
 
 
+def cmd_patterns() -> None:
+    """Where approvals turn into applications, and applications into interviews."""
+    from core.patterns import pattern_report
+    spec = load_profile().get("job_spec", {})
+    print("\n".join(pattern_report(Queue(), spec)))
+
+
+def cmd_followups() -> None:
+    """Applications with no reply after a week, oldest first."""
+    from core.followups import COLD_DAYS, FOLLOW_UP_DAYS, follow_ups
+    due, cold = follow_ups(Queue())
+    print(f"{len(due)} follow-up(s) due ({FOLLOW_UP_DAYS}-{COLD_DAYS - 1} days, no"
+          f" reply); {cold} gone cold ({COLD_DAYS}+ days).")
+    for f in due[:25]:
+        print(f"  {f.days:>2}d  [{f.platform}] {f.title} - {f.company}\n       {f.url}")
+    if len(due) > 25:
+        print(f"  ... and {len(due) - 25} more (see the Tracker sheet)")
+    if due:
+        print("Tick 'Followed up' in the Tracker sheet once sent; the next"
+              " board rebuild records it.")
+
+
 def cmd_job_board() -> None:
     """Rebuild the local Excel kanban board from the complete queue."""
     from core.job_board import BOARD_PATH, build_job_board
@@ -586,7 +610,8 @@ def cmd_routine() -> None:
             continue
         _, out = _run_step(["apply", platform], timeout=1800)
         for line in out.splitlines():
-            if "applied ✓" in line or "failed:" in line or "will retry" in line:
+            if ("applied ✓" in line or "failed:" in line or "will retry" in line
+                    or "expired:" in line):
                 clean = line.strip().lstrip("→ ").strip().replace("✓", "(applied)")
                 applied_lines.append(f"  {clean}")
 
@@ -624,6 +649,11 @@ def cmd_routine() -> None:
     if outcomes:
         report.append("Outcomes: " + ", ".join(
             f"{n} {name}" for name, n in outcomes.items()))
+    from core.followups import follow_ups
+    due, cold = follow_ups(queue)
+    if due:
+        report.append(f"Follow-ups due: {len(due)} (oldest {due[0].days}d) -"
+                      f" python app.py followups")
     if pending:
         report.append("Review: python app.py review -> http://127.0.0.1:8377")
     # Final safety net: guarantee ASCII regardless of captured subprocess text.
@@ -665,6 +695,8 @@ def main() -> None:
     stale = sub.add_parser("retire-stale")
     stale.add_argument("--days", type=int, default=STALE_PENDING_DAYS)
     sub.add_parser("job-board")
+    sub.add_parser("patterns")
+    sub.add_parser("followups")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -697,6 +729,10 @@ def main() -> None:
         cmd_retire_stale(args.days)
     elif args.cmd == "job-board":
         cmd_job_board()
+    elif args.cmd == "patterns":
+        cmd_patterns()
+    elif args.cmd == "followups":
+        cmd_followups()
 
 
 if __name__ == "__main__":

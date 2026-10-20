@@ -123,10 +123,14 @@ def _sync_outcomes(existing: dict[str, dict], db_path: Path) -> int:
     queue = Queue(db_path)
     changed = 0
     for key, vals in existing.items():
+        platform, _, external_id = key.partition(":")
+        # The "Followed up" checkbox: carried into SQLite so `followups` and
+        # the daily report stop nagging about it. Not counted as an outcome.
+        if vals.get("Followed up") is True and platform and external_id:
+            queue.set_followed_up(platform, external_id)
         status = str(vals.get("Status") or "").strip()
         if not status or status.lower() == "applied":
             continue
-        platform, _, external_id = key.partition(":")
         if platform and external_id and queue.set_outcome(
                 platform, external_id, status.lower()):
             changed += 1

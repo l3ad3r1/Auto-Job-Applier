@@ -147,6 +147,11 @@ class Queue:
                 "ALTER TABLE applications ADD COLUMN outcome TEXT DEFAULT ''")
             self.conn.execute(
                 "ALTER TABLE applications ADD COLUMN outcome_at TEXT DEFAULT ''")
+        if "followed_up_at" not in acols:
+            # Set from the Tracker sheet's "Followed up" checkbox, so the CLI
+            # and the daily report stop listing a follow-up already sent.
+            self.conn.execute(
+                "ALTER TABLE applications ADD COLUMN followed_up_at TEXT DEFAULT ''")
         if "flags" not in acols:
             # Discovery-time warnings (posting guard, repost); see models.
             self.conn.execute(
@@ -329,6 +334,16 @@ class Queue:
             (outcome, utcnow(), row["id"]))
         self.conn.commit()
         return True
+
+    def set_followed_up(self, platform: str, external_id: str) -> bool:
+        """Record that a follow-up was sent. Returns True if it changed."""
+        cur = self.conn.execute(
+            """UPDATE applications SET followed_up_at=?
+               WHERE IFNULL(followed_up_at,'')='' AND job_id IN (
+                   SELECT id FROM jobs WHERE platform=? AND external_id=?)""",
+            (utcnow(), platform, external_id))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def outcome_counts(self) -> dict[str, int]:
         rows = self.conn.execute(

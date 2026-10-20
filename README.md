@@ -78,6 +78,8 @@ python app.py status              # queue counts
 python app.py export              # applied jobs -> data/applied_jobs.csv
 python app.py sync-sheet          # append applied jobs to your Google Sheet
 python app.py referrals --dry-run # find connections + draft referral asks (never sends)
+python app.py patterns            # apply success by platform, failure reasons, interview rates
+python app.py followups           # applied 7-29 days ago with no reply yet
 ```
 
 ### Google Sheet auto-append (optional)

@@ -193,7 +193,9 @@ class BaseAdapter(ABC):
         except PWError:
             return None
         reason = closed_reason(text)
-        return ApplyResult(False, f"posting closed: {reason!r}", expired=True)             if reason else None
+        if not reason:
+            return None
+        return ApplyResult(False, f"posting closed: {reason!r}", expired=True)
 
     def close_browser(self) -> None:
         try:
