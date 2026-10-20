@@ -75,6 +75,9 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
       * no posting-guard flag (text aimed at an AI, tampered characters)
         and no LLM-rescued title: those always get a human read
       * easy_apply only when require_easy_apply (external ATS just fails)
+      * not the same opening already applied/approved on another listing
+      * at most max_per_company applied/approved rows per employer in
+        company_window_days (adapted from career-ops company-history, MIT)
       * auto_apply.daily_max unreviewed promotions per day, counted from the
         notes marker, on top of the normal per-platform caps in safety.py
 
@@ -82,9 +85,11 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
     DB both show what went out unreviewed.
     """
     import json as _json
+    from collections import Counter
 
     from core.matching import score_job
     from core.posting_guard import FLAG as POSTING_GUARD_FLAG
+    from core.queue import company_key
     from core.title_rescue import FLAG as RESCUE_FLAG
 
     cfg = (load_config().get("auto_apply") or {})
@@ -97,6 +102,10 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
                    for k, v in (cfg.get("min_score_by_platform") or {}).items()}
     daily_max = int(cfg.get("daily_max", 10))
     need_easy = bool(cfg.get("require_easy_apply", True))
+    # 42 applications went to Bajaj Finance, half unreviewed. 0 disables.
+    per_company = int(cfg.get("max_per_company", 3))
+    company_days = int(cfg.get("company_window_days", 30))
+    run_by_company: Counter = Counter()
 
     def threshold_for(platform: str) -> int:
         return by_platform.get(platform.lower(), min_score)
@@ -130,10 +139,20 @@ def cmd_auto_approve(dry_run: bool = False) -> None:
         if need_easy and not job.easy_apply:
             held.append((job.title, "not easy-apply"))
             continue
+        if queue.duplicate_of(job, ("applied", "approved")):
+            held.append((job.title, "same opening applied/approved elsewhere"))
+            continue
+        company = company_key(job.company)
+        recent = queue.company_count(job.company, company_days) + run_by_company[company]
+        if per_company and recent >= per_company:
+            held.append((job.title, f"{recent} at {job.company} in {company_days}d"
+                         f" (max_per_company {per_company})"))
+            continue
         if len(promoted) >= budget:
             held.append((job.title, f"daily_max {daily_max} reached"))
             continue
         promoted.append((item.app_id, job.platform, job.title, job.company, score))
+        run_by_company[company] += 1
 
     label = "WOULD auto-approve" if dry_run else "auto-approved"
     bars = ", ".join(f"{p}>={s}" for p, s in sorted(by_platform.items()))
@@ -329,6 +348,13 @@ def cmd_apply(platform: str, limit: int | None = None) -> None:
                 print(f"STOP: {e}")
                 break
             print(f"→ {item.job.title} @ {item.job.company} ... ", end="", flush=True)
+            duplicate = queue.duplicate_of(item.job)
+            if duplicate:
+                # Checked here, not only at approval: the other listing may
+                # have been applied to since this one was approved.
+                queue.set_state(item.app_id, State.SKIPPED, notes=duplicate)
+                print(duplicate)
+                continue
             try:
                 result = adapter.apply(page, item, limiter)
             except Exception as e:  # one bad job must not kill the batch

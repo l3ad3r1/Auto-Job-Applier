@@ -33,9 +33,9 @@ class RescueTitlesTests(unittest.TestCase):
             seen["user"] = user
             return '```json\n{"rescue": [0, 2]}\n```'
 
-        got = rescue_titles(["Key Accounts Manager", "Sales Executive",
+        got = rescue_titles(["Corporate Accounts Manager", "Sales Executive",
                              "Sales Head"], TARGETS, fake)
-        self.assertEqual(got, {"Key Accounts Manager", "Sales Head"})
+        self.assertEqual(got, {"Corporate Accounts Manager", "Sales Head"})
         self.assertIn("- key account manager", seen["user"])
         self.assertIn("1. Sales Executive", seen["user"])
 
@@ -66,7 +66,7 @@ class RescueTitlesTests(unittest.TestCase):
 
 class RescuedScoringTests(unittest.TestCase):
     def test_rescue_tops_up_a_near_miss(self) -> None:
-        j = job("Key Accounts Manager")
+        j = job("Corporate Accounts Manager")
         ok, result = is_match(j, SPEC)
         self.assertFalse(ok)
         self.assertIn("title not in target_titles", result.reasons)
@@ -88,16 +88,16 @@ class PrepareRescueTests(unittest.TestCase):
     def test_prepare_routes_rescued_titles_to_review_with_a_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             queue = Queue(Path(tmp) / "queue.db")
-            rescued = queue.add_job(job("Key Accounts Manager", "1"))
+            rescued = queue.add_job(job("Corporate Accounts Manager", "1"))
             ignored = queue.add_job(job("Sales Executive", "2"))
-            far = queue.add_job(job("Key Accounts Manager", "3",
+            far = queue.add_job(job("Corporate Accounts Manager", "3",
                                     location="Pune", easy_apply=False,
                                     posted_age_days=60))
             asked = {}
 
             def fake_rescue(titles, targets):
                 asked["titles"] = titles
-                return {"Key Accounts Manager"}
+                return {"Corporate Accounts Manager"}
 
             profile = {"job_spec": SPEC, "answers": {}}
             with mock.patch.object(app, "Queue", lambda: queue), \
@@ -107,7 +107,7 @@ class PrepareRescueTests(unittest.TestCase):
 
             # Only rows that could clear the bar with the rescue are asked about.
             self.assertEqual(sorted(asked["titles"]),
-                             ["Key Accounts Manager", "Sales Executive"])
+                             ["Corporate Accounts Manager", "Sales Executive"])
             self.assertEqual(queue.get(rescued).application.state,
                              State.PENDING_REVIEW.value)
             self.assertIn(FLAG, queue.get(rescued).application.flags)

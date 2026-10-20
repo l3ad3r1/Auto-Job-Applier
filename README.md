@@ -28,6 +28,13 @@ discover → score/prepare → YOU approve in the dashboard → apply (paced, ca
   from auto-approve. See [core/posting_guard.py](core/posting_guard.py)
 - **Repost flag** — the same company re-listing the same title and location
   on a later day is flagged as a possible ghost posting
+- **Duplicate guard** — one opening cross-posted to several boards (same
+  company, same title words, overlapping town) is applied to once: the apply
+  step skips the later copy, discovery flags it, auto-approve holds it
+- **Per-company cap** — auto-approve promotes at most
+  `auto_apply.max_per_company` (default 3) jobs per employer within
+  `auto_apply.company_window_days` (default 30); `0` turns it off. Manual
+  approvals are not capped
 - **Closed-posting detection** — when the apply button is missing, the job
   page is checked for "no longer accepting applications" banners and the row
   is marked `expired` instead of failed (no retry, no debug capture)
@@ -78,7 +85,7 @@ python app.py status              # queue counts
 python app.py export              # applied jobs -> data/applied_jobs.csv
 python app.py sync-sheet          # append applied jobs to your Google Sheet
 python app.py referrals --dry-run # find connections + draft referral asks (never sends)
-python app.py patterns            # apply success by platform, failure reasons, interview rates
+python app.py patterns            # apply success, failure reasons, interview rates, skip reasons
 python app.py followups           # applied 7-29 days ago with no reply yet
 ```
 

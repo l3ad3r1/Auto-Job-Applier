@@ -30,6 +30,42 @@ def title_identity(title: str) -> frozenset[str]:
     return frozenset(re.findall(r"[a-z0-9]+", title.lower()))
 
 
+# Legal-form words that differ between boards for one employer:
+# "Skill2Source" on LinkedIn is "skill2source pvt ltd" on Foundit.
+_COMPANY_NOISE = {"pvt", "private", "ltd", "limited", "llp", "inc", "corp",
+                  "corporation", "co", "company", "the"}
+# Location words that say nothing about which town the opening is in.
+_LOCATION_NOISE = {"india", "remote", "hybrid", "onsite", "on", "site", "in"}
+
+
+def company_key(name: str) -> str:
+    """One employer's name as every board spells it. Adapted from career-ops
+    listing-fingerprint.mjs (MIT)."""
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    return " ".join(w for w in words if w not in _COMPANY_NOISE)
+
+
+def _towns(location: str) -> set[str]:
+    return title_identity(location) - _LOCATION_NOISE
+
+
+def same_opening(a: Job, b: Job) -> bool:
+    """Two listings of one opening, possibly on different boards.
+
+    Company and title word set must match. Towns must overlap, because boards
+    format location differently ("Hyderabad" vs "Hyderabad, Telangana, India")
+    while one title in two towns is two openings (Bajaj Finance lists "Branch
+    Manager" in dozens). A listing with no town is compared on company and
+    title alone.
+    """
+    if not company_key(a.company) or company_key(a.company) != company_key(b.company):
+        return False
+    if title_identity(a.title) != title_identity(b.title):
+        return False
+    ta, tb = _towns(a.location), _towns(b.location)
+    return not ta or not tb or bool(ta & tb)
+
+
 def _col(row: sqlite3.Row, name: str, default):
     """Read a column that may predate the caller's migration.
 
@@ -200,6 +236,9 @@ class Queue:
         repost = self._repost_of(job)
         if repost:
             flags.append(repost)
+        duplicate = self.duplicate_of(job, ("applied", "approved"))
+        if duplicate:
+            flags.append(duplicate)
         cur = self.conn.execute(
             "INSERT INTO applications (job_id, state, updated_at, flags)"
             " VALUES (?,?,?,?)",
@@ -240,6 +279,45 @@ class Queue:
                 return (f"repost: same title listed {row['discovered_at'][:10]}"
                         f" as {row['external_id']} - possible ghost posting")
         return ""
+
+    def duplicate_of(self, job: Job, states: Iterable[str] = ("applied",)) -> str:
+        """Describe an earlier row for the same opening in one of `states`,
+        on any platform under a different listing id; empty if none.
+
+        Cross-posted openings were applied to twice (Skill2Source on LinkedIn
+        and Foundit; People Tech Group twice on Foundit). Adapted from
+        career-ops dedup-tracker.mjs (MIT).
+        """
+        states = list(states)
+        rows = self.conn.execute(
+            f"""SELECT j.*, a.id AS app_id, a.state FROM jobs j
+                  JOIN applications a ON a.job_id = j.id
+                 WHERE a.state IN ({",".join("?" * len(states))})
+                   AND NOT (j.platform = ? AND j.external_id = ?)""",
+            (*states, job.platform, job.external_id))
+        for row in rows:
+            other = Job(platform=row["platform"], external_id=row["external_id"],
+                        title=row["title"], company=row["company"],
+                        location=row["location"])
+            if same_opening(job, other):
+                return (f"duplicate: same opening {row['state']} on"
+                        f" {row['platform']} as app {row['app_id']}")
+        return ""
+
+    def company_count(self, company: str, days: int,
+                      states: Iterable[str] = ("applied", "approved")) -> int:
+        """Rows for this employer in `states` updated in the last `days` days."""
+        key = company_key(company)
+        if not key:
+            return 0
+        states = list(states)
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=days)).isoformat(timespec="seconds")
+        rows = self.conn.execute(
+            f"""SELECT j.company FROM jobs j JOIN applications a ON a.job_id = j.id
+                 WHERE a.state IN ({",".join("?" * len(states))})
+                   AND a.updated_at >= ?""", (*states, cutoff))
+        return sum(company_key(r["company"]) == key for r in rows)
 
     # -- state transitions ---------------------------------------------------
 

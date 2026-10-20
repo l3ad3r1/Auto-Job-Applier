@@ -11,6 +11,7 @@ Two sections, adapted from career-ops analyze-patterns.mjs / calibrate (MIT):
             and discovery source. Answers "does a higher score actually get
             more interviews?", which is what min_score and the auto-apply bar
             should be set from.
+  skips     why discovered jobs were skipped, and the titles missed most.
 
 A rate is printed only when a group has MIN_OUTCOMES recorded outcomes;
 below that it shows "-", because 1 interview in 2 is not a 50% rate.
@@ -20,7 +21,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
-from .matching import score_job
+from .matching import _title_points, score_job
 from .models import State
 from .queue import Queue
 
@@ -107,4 +108,40 @@ def pattern_report(queue: Queue, spec: dict) -> list[str]:
                     if c["recorded"] >= MIN_OUTCOMES else "-")
             lines.append(f"    {value:<22} {c['applied']:>4} applied"
                          f" {c['recorded']:>4} recorded  rate {rate}")
+    return lines + [""] + skip_report(queue, spec)
+
+
+def skip_reason(note: str) -> str:
+    """Group the scorer's skip notes ("score 34: title not in target_titles;
+    ...") and the apply step's duplicate skips."""
+    note = note or ""
+    if note.startswith("duplicate"):
+        return "duplicate of an applied opening"
+    if "dealbreaker" in note:
+        return "dealbreaker" + note.split("dealbreaker")[1].split(";")[0]
+    if "tops out below" in note:
+        return "salary below floor"
+    if "title not in target_titles" in note:
+        return "title not in target_titles"
+    return "score below min_score"
+
+
+def skip_report(queue: Queue, spec: dict, top: int = 10) -> list[str]:
+    """Why discovered jobs never reached review, and the titles missed most.
+
+    Two in three skips are title misses; the most frequent missed titles are
+    the candidates for target_titles. A title is listed only if the current
+    target_titles still miss it: older skips predate titles added since.
+    Adapted from career-ops discard-analytics.mjs (MIT).
+    """
+    skipped = queue.items(State.SKIPPED)
+    lines = [f"SKIPS - why {len(skipped)} discovered jobs never reached review"]
+    reasons = Counter(skip_reason(i.application.notes) for i in skipped)
+    lines += [f"    {n:>4}  {r}" for r, n in reasons.most_common(8)]
+    missed = Counter(i.job.title.strip().lower() for i in skipped
+                     if skip_reason(i.application.notes) == "title not in target_titles"
+                     and not _title_points(i.job.title.lower(), spec)[0])
+    if missed:
+        lines.append("  Most-missed titles (add real fits to job_spec.target_titles):")
+        lines += [f"    {n:>4}  {t}" for t, n in missed.most_common(top)]
     return lines

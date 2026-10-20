@@ -225,6 +225,23 @@ def test_reordered_title_matches_the_same_role():
         assert _title_points(title, bdm)[0] > 0, title
 
 
+def test_plural_word_in_title_matches_the_target():
+    """"Key Accounts Manager" is a key account manager: plain substring
+    matching missed it 14 times. Plural folding must not admit a different
+    role or a match inside a longer word."""
+    from core.matching import _title_points
+    spec = _spec_titles("key account manager", "sales manager")
+    for title in ("key accounts manager", "key accounts manager - fmcg",
+                  "senior key accounts manager", "sales managers"):
+        assert _title_points(title, spec)[0] > 0, title
+    for title in ("key accounts executive", "accounts manager",
+                  "key accountant manager"):
+        assert _title_points(title, spec)[0] == 0, title
+    # Same specificity bonuses as the singular spelling.
+    assert (_title_points("key accounts manager", spec)[0]
+            == _title_points("key account manager", spec)[0])
+
+
 def test_reordering_does_not_admit_a_different_job():
     """The window must open on "manager" at the start or after a seniority
     word. Gaps and other leading nouns are different roles."""

@@ -86,6 +86,18 @@ _MANAGER_PREFIX = {"senior", "sr", "general", "regional", "zonal", "state",
                    "national", "area", "cluster", "deputy", "lead"}
 
 
+def _token_hit(target: str, title_tokens: list[str]) -> int:
+    """Where the target's words sit adjacent and in order in the title, with
+    plurals folded; -1 if they do not. "Key Accounts Manager" holds "key
+    account manager" this way, which substring matching missed."""
+    want = _title_tokens(target)
+    n = len(want)
+    for i in range(len(title_tokens) - n + 1):
+        if title_tokens[i:i + n] == want:
+            return i
+    return -1
+
+
 def _reordered_hit(target: str, title_tokens: list[str]) -> bool:
     """"Manager - Business Development" for the target "business development
     manager": same words, adjacent, but with the role word moved to the front.
@@ -129,7 +141,8 @@ def _title_points(title: str, spec: dict,
     """
     targets = [t.lower() for t in spec.get("target_titles", [])]
     tokens = _title_tokens(title)
-    hits = [t for t in targets if t in title or _reordered_hit(t, tokens)]
+    hits = [t for t in targets if t in title or _token_hit(t, tokens) >= 0
+            or _reordered_hit(t, tokens)]
     if not hits and not rescued:
         return 0, ["title not in target_titles"]
 
@@ -142,7 +155,7 @@ def _title_points(title: str, spec: dict,
 
         # A match at the front is the role; deep in the string it is often a
         # qualifier ("Intern supporting the Sales Manager").
-        if title.startswith(best):
+        if title.startswith(best) or _token_hit(best, tokens) == 0:
             points += 6
             reasons.append("title starts with the match")
 
